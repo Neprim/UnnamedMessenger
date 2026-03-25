@@ -76,37 +76,45 @@
 <style>
   .container {
     max-width: 400px;
-    margin: 50px auto;
-    padding: 20px;
+    margin: 100px auto;
+    padding: 40px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
   }
   h1 {
     text-align: center;
     margin-bottom: 30px;
   }
   .field {
-    margin-bottom: 15px;
+    margin-bottom: 20px;
   }
   label {
     display: block;
-    margin-bottom: 5px;
-    font-weight: bold;
+    margin-bottom: 8px;
+    font-weight: 600;
   }
   input {
     width: 100%;
-    padding: 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    font-size: 14px;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 15px;
+  }
+  input:focus {
+    outline: none;
+    border-color: #4CAF50;
   }
   button {
     width: 100%;
-    padding: 12px;
+    padding: 14px;
     background: #4CAF50;
     color: white;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
     font-size: 16px;
+    font-weight: 600;
   }
   button:disabled {
     background: #ccc;
@@ -115,14 +123,17 @@
     background: #45a049;
   }
   .error {
-    color: red;
-    margin-bottom: 10px;
+    color: #f44336;
+    margin-bottom: 15px;
+    text-align: center;
   }
   .link {
     text-align: center;
-    margin-top: 20px;
+    margin-top: 25px;
+    color: #666;
   }
   a {
     color: #4CAF50;
+    font-weight: 600;
   }
 </style>

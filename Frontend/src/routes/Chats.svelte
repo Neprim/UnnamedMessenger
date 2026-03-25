@@ -140,83 +140,100 @@
 
 <style>
   .container {
-    max-width: 600px;
+    max-width: 800px;
     margin: 0 auto;
-    padding: 20px;
+    padding: 30px;
   }
   header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 20px;
+    margin-bottom: 30px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #eee;
   }
   h1 {
     margin: 0;
+    font-size: 28px;
   }
   .logout {
-    padding: 8px 16px;
+    padding: 10px 20px;
     background: #f44336;
     color: white;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .logout:hover {
+    background: #d32f2f;
   }
   .loading, .error {
     text-align: center;
-    padding: 20px;
+    padding: 40px;
+    color: #666;
   }
   .error {
-    color: red;
+    color: #f44336;
   }
   .chat-list {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
   }
   .chat-item {
     display: flex;
     align-items: center;
-    gap: 15px;
-    padding: 15px;
-    background: #f5f5f5;
-    border-radius: 8px;
+    gap: 20px;
+    padding: 20px;
+    background: white;
+    border-radius: 10px;
     text-decoration: none;
     color: inherit;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    transition: box-shadow 0.2s, transform 0.2s;
   }
   .chat-item:hover {
-    background: #e8e8e8;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    transform: translateY(-1px);
   }
   .chat-icon {
-    width: 40px;
-    height: 40px;
+    width: 50px;
+    height: 50px;
     background: #4CAF50;
     color: white;
-    border-radius: 50%;
+    border-radius: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
     font-weight: bold;
+    font-size: 18px;
   }
   .chat-info {
     flex: 1;
   }
   .chat-name {
-    font-weight: bold;
+    font-weight: 600;
+    font-size: 16px;
   }
   .chat-meta {
-    color: #666;
-    font-size: 12px;
+    color: #888;
+    font-size: 13px;
+    margin-top: 4px;
   }
   .create-btn {
     width: 100%;
-    padding: 15px;
-    margin-top: 20px;
+    padding: 18px;
+    margin-top: 25px;
     background: #4CAF50;
     color: white;
     border: none;
-    border-radius: 8px;
+    border-radius: 10px;
     font-size: 16px;
+    font-weight: 600;
     cursor: pointer;
+    transition: background 0.2s;
   }
   .create-btn:hover {
     background: #45a049;
@@ -231,47 +248,59 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    z-index: 100;
   }
   .modal {
     background: white;
     padding: 30px;
-    border-radius: 8px;
-    width: 400px;
-    max-width: 90%;
+    border-radius: 12px;
+    width: 450px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
   }
   .modal h2 {
-    margin-top: 0;
+    margin: 0 0 25px;
+    font-size: 22px;
   }
   .field {
-    margin-bottom: 15px;
+    margin-bottom: 20px;
   }
   .field label {
     display: block;
-    margin-bottom: 5px;
-    font-weight: bold;
+    margin-bottom: 8px;
+    font-weight: 600;
+    font-size: 14px;
   }
   .field input, .field select {
     width: 100%;
-    padding: 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    font-size: 14px;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 15px;
+  }
+  .field input:focus, .field select:focus {
+    outline: none;
+    border-color: #4CAF50;
   }
   .modal-actions {
     display: flex;
-    gap: 10px;
+    gap: 12px;
     justify-content: flex-end;
-    margin-top: 20px;
+    margin-top: 25px;
   }
   .modal-actions button {
-    padding: 10px 20px;
+    padding: 12px 24px;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
   }
   .modal-actions button.primary {
     background: #4CAF50;
     color: white;
+  }
+  .modal-actions button.primary:hover {
+    background: #45a049;
   }
   .modal-actions button:disabled {
     background: #ccc;

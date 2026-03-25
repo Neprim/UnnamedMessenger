@@ -59,10 +59,15 @@
               }
             })
           );
-          messages = decryptedMessages.reverse();
+          messages = decryptedMessages;
         } else {
-          messages = result.messages.reverse();
+          messages = result.messages;
         }
+
+        setTimeout(() => {
+          const container = document.querySelector('.messages');
+          if (container) container.scrollTop = container.scrollHeight;
+        }, 100);
       } catch (e) {
         error = e instanceof Error ? e.message : 'Failed to load chat';
       } finally {
@@ -80,6 +85,10 @@
       const message = await api.chats.sendMessage(params.id, encryptedContent);
       messages = [...messages, { ...message, content: newMessage }];
       newMessage = '';
+      setTimeout(() => {
+        const container = document.querySelector('.messages');
+        if (container) container.scrollTop = container.scrollHeight;
+      }, 50);
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to send message';
     } finally {
@@ -184,49 +193,59 @@
 
 <style>
   .container {
-    max-width: 600px;
+    max-width: 900px;
     margin: 0 auto;
-    padding: 20px;
+    padding: 30px;
     height: 100vh;
     display: flex;
     flex-direction: column;
+    background: white;
   }
   header {
     display: flex;
     align-items: center;
-    gap: 15px;
-    margin-bottom: 20px;
+    gap: 20px;
+    margin-bottom: 25px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #eee;
   }
   .back {
-    padding: 8px 16px;
+    padding: 10px 18px;
     background: #f5f5f5;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
+    font-size: 14px;
+  }
+  .back:hover {
+    background: #e8e8e8;
   }
   h1 {
     margin: 0;
+    flex: 1;
+    font-size: 22px;
   }
   .loading, .error {
     text-align: center;
-    padding: 20px;
+    padding: 40px;
+    color: #666;
   }
   .error {
-    color: red;
+    color: #f44336;
   }
   .messages {
     flex: 1;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 15px;
-    padding-bottom: 20px;
+    gap: 16px;
+    padding: 20px 0;
   }
   .message {
-    max-width: 70%;
-    padding: 10px 15px;
+    max-width: 60%;
+    padding: 14px 18px;
     background: #f5f5f5;
-    border-radius: 8px;
+    border-radius: 16px;
     align-self: flex-start;
   }
   .message.own {
@@ -235,68 +254,88 @@
   }
   .message-content {
     word-wrap: break-word;
+    font-size: 15px;
   }
   .message-meta {
-    font-size: 11px;
-    color: #666;
-    margin-top: 5px;
+    font-size: 12px;
+    color: #888;
+    margin-top: 6px;
   }
   .delete {
-    font-size: 11px;
+    font-size: 12px;
     color: #f44336;
     background: none;
     border: none;
     cursor: pointer;
     padding: 0;
-    margin-top: 5px;
+    margin-top: 6px;
   }
   .input-area {
     display: flex;
-    gap: 10px;
-    padding-top: 15px;
+    gap: 15px;
+    padding-top: 20px;
     border-top: 1px solid #eee;
   }
   .input-area input {
     flex: 1;
-    padding: 12px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    font-size: 14px;
+    padding: 14px 18px;
+    border: 1px solid #ddd;
+    border-radius: 24px;
+    font-size: 15px;
+  }
+  .input-area input:focus {
+    outline: none;
+    border-color: #4CAF50;
   }
   .input-area button {
-    padding: 12px 24px;
+    padding: 14px 28px;
     background: #4CAF50;
     color: white;
     border: none;
-    border-radius: 4px;
+    border-radius: 24px;
     cursor: pointer;
+    font-size: 15px;
+    font-weight: 500;
+  }
+  .input-area button:hover:not(:disabled) {
+    background: #45a049;
   }
   .input-area button:disabled {
     background: #ccc;
   }
   .field {
-    margin-bottom: 15px;
+    margin-bottom: 20px;
   }
   .field label {
     display: block;
-    margin-bottom: 5px;
-    font-weight: bold;
+    margin-bottom: 8px;
+    font-weight: 600;
+    font-size: 14px;
   }
   .field input {
     width: 100%;
-    padding: 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    font-size: 14px;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 15px;
     box-sizing: border-box;
   }
+  .field input:focus {
+    outline: none;
+    border-color: #2196F3;
+  }
   .add-member {
-    padding: 8px 16px;
+    padding: 10px 20px;
     background: #2196F3;
     color: white;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .add-member:hover {
+    background: #1976D2;
   }
   .modal-overlay {
     position: fixed;
@@ -313,43 +352,50 @@
   .modal {
     background: white;
     padding: 30px;
-    border-radius: 8px;
-    width: 400px;
-    max-width: 90%;
+    border-radius: 12px;
+    width: 450px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
   }
   .modal h2 {
-    margin-top: 0;
+    margin: 0 0 25px;
+    font-size: 22px;
   }
   .search-results {
-    max-height: 200px;
+    max-height: 250px;
     overflow-y: auto;
-    margin-top: 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
+    margin-top: 15px;
+    border: 1px solid #eee;
+    border-radius: 8px;
   }
   .search-result {
-    padding: 10px;
+    padding: 14px 16px;
     cursor: pointer;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 15px;
   }
   .search-result:hover {
-    background: #f5f5f5;
+    background: #f9f9f9;
   }
   .modal-actions {
     display: flex;
-    gap: 10px;
+    gap: 12px;
     justify-content: flex-end;
-    margin-top: 20px;
+    margin-top: 25px;
   }
   .modal-actions button {
-    padding: 10px 20px;
+    padding: 12px 24px;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
   }
   .modal-actions button.primary {
     background: #4CAF50;
     color: white;
+  }
+  .modal-actions button.primary:hover {
+    background: #45a049;
   }
   .modal-actions button:disabled {
     background: #ccc;
