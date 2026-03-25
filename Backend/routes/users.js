@@ -76,9 +76,13 @@ router.get('/search', authenticate, (req, res) => {
       return res.status(400).json({ error: 'Query parameter required' });
     }
     
-    const users = db.prepare('SELECT id, username FROM users WHERE username LIKE ? LIMIT 20').get(`%${q}%`);
+    const users = db.prepare('SELECT id, username, public_key FROM users WHERE username LIKE ? LIMIT 20').all(`%${q}%`);
     
-    res.json(users);
+    res.json(users.map(u => ({
+      id: u.id,
+      username: u.username,
+      publicKey: u.public_key
+    })));
   } catch (err) {
     console.error('Search users error:', err);
     res.status(500).json({ error: 'Internal server error' });

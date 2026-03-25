@@ -1,0 +1,192 @@
+const ALGORITHM_RSA = 'RSA-OAEP';
+const ALGORITHM_AES = 'AES-GCM';
+const KEY_LENGTH = 2048;
+const AES_KEY_LENGTH = 256;
+
+export async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+
+  return crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations: 100000,
+      hash: 'SHA-256'
+    },
+    keyMaterial,
+    { name: ALGORITHM_AES, length: AES_KEY_LENGTH },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+export async function encryptPrivateKey(privateKey: CryptoKey, password: string, salt: Uint8Array): Promise<string> {
+  const derivedKey = await deriveKey(password, salt);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  
+  const exported = await crypto.subtle.exportKey('pkcs8', privateKey);
+  
+  const encrypted = await crypto.subtle.encrypt(
+    { name: ALGORITHM_AES, iv },
+    derivedKey,
+    exported
+  );
+
+  const combined = new Uint8Array(iv.length + encrypted.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(encrypted), iv.length);
+
+  return btoa(String.fromCharCode(...combined));
+}
+
+export async function decryptPrivateKey(encryptedData: string, password: string, salt: Uint8Array): Promise<CryptoKey> {
+  const derivedKey = await deriveKey(password, salt);
+  const combined = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
+  
+  const iv = combined.slice(0, 12);
+  const encrypted = combined.slice(12);
+
+  const decrypted = await crypto.subtle.decrypt(
+    { name: ALGORITHM_AES, iv },
+    derivedKey,
+    encrypted
+  );
+
+  return crypto.subtle.importKey(
+    'pkcs8',
+    decrypted,
+    { name: ALGORITHM_RSA, hash: 'SHA-256' },
+    true,
+    ['decrypt']
+  );
+}
+
+export async function generateKeyPair(): Promise<{ publicKey: CryptoKey; privateKey: CryptoKey }> {
+  const keyPair = await crypto.subtle.generateKey(
+    {
+      name: ALGORITHM_RSA,
+      modulusLength: KEY_LENGTH,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: 'SHA-256'
+    },
+    true,
+    ['encrypt', 'decrypt']
+  );
+
+  return { publicKey: keyPair.publicKey, privateKey: keyPair.privateKey };
+}
+
+export async function exportPublicKey(key: CryptoKey): Promise<string> {
+  const exported = await crypto.subtle.exportKey('spki', key);
+  return btoa(String.fromCharCode(...new Uint8Array(exported)));
+}
+
+export async function importPublicKey(keyData: string): Promise<CryptoKey> {
+  const keyBytes = Uint8Array.from(atob(keyData), c => c.charCodeAt(0));
+  return crypto.subtle.importKey(
+    'spki',
+    keyBytes,
+    { name: ALGORITHM_RSA, hash: 'SHA-256' },
+    false,
+    ['encrypt']
+  );
+}
+
+export async function encryptWithPublicKey(publicKey: CryptoKey, data: Uint8Array): Promise<string> {
+  const encrypted = await crypto.subtle.encrypt(
+    { name: ALGORITHM_RSA },
+    publicKey,
+    data
+  );
+  return btoa(String.fromCharCode(...new Uint8Array(encrypted)));
+}
+
+export async function decryptWithPrivateKey(privateKey: CryptoKey, encryptedData: string): Promise<Uint8Array> {
+  const encrypted = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
+  const decrypted = await crypto.subtle.decrypt(
+    { name: ALGORITHM_RSA },
+    privateKey,
+    encrypted
+  );
+  return new Uint8Array(decrypted);
+}
+
+export async function generateChatKey(): Promise<CryptoKey> {
+  return crypto.subtle.generateKey(
+    { name: ALGORITHM_AES, length: AES_KEY_LENGTH },
+    true,
+    ['encrypt', 'decrypt']
+  );
+}
+
+export async function exportChatKey(key: CryptoKey): Promise<string> {
+  const exported = await crypto.subtle.exportKey('raw', key);
+  return btoa(String.fromCharCode(...new Uint8Array(exported)));
+}
+
+export async function importChatKey(keyData: string): Promise<CryptoKey> {
+  const keyBytes = Uint8Array.from(atob(keyData), c => c.charCodeAt(0));
+  return crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: ALGORITHM_AES, length: AES_KEY_LENGTH },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+export async function encryptMessage(chatKey: CryptoKey, message: string): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoder = new TextEncoder();
+  
+  const encrypted = await crypto.subtle.encrypt(
+    { name: ALGORITHM_AES, iv },
+    chatKey,
+    encoder.encode(message)
+  );
+
+  const combined = new Uint8Array(iv.length + encrypted.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(encrypted), iv.length);
+
+  return btoa(String.fromCharCode(...combined));
+}
+
+export async function decryptMessage(chatKey: CryptoKey, encryptedData: string): Promise<string> {
+  const combined = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
+  const iv = combined.slice(0, 12);
+  const encrypted = combined.slice(12);
+
+  const decrypted = await crypto.subtle.decrypt(
+    { name: ALGORITHM_AES, iv },
+    chatKey,
+    encrypted
+  );
+
+  const decoder = new TextDecoder();
+  return decoder.decode(decrypted);
+}
+
+export async function encryptChatKeyWithPublicKey(chatKey: CryptoKey, publicKey: CryptoKey): Promise<string> {
+  const exportedKey = await crypto.subtle.exportKey('raw', chatKey);
+  const keyBytes = new Uint8Array(exportedKey);
+  return encryptWithPublicKey(publicKey, keyBytes);
+}
+
+export async function decryptChatKeyWithPrivateKey(encryptedKey: string, privateKey: CryptoKey): Promise<CryptoKey> {
+  const keyBytes = await decryptWithPrivateKey(privateKey, encryptedKey);
+  return crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: ALGORITHM_AES, length: AES_KEY_LENGTH },
+    true,
+    ['encrypt', 'decrypt']
+  );
+}

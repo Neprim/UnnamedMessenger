@@ -8,7 +8,10 @@ const path = require('path');
 
 const app = express();
 
-app.use(cors());
+app.use(cors({
+  origin: 'http://localhost:5173',
+  credentials: true
+}));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -21,11 +24,11 @@ app.get('/', (req, res) => {
   res.send('UnnamedMessenger API');
 });
 
-app.use('/auth', require('./routes/auth'));
-app.use('/users', require('./routes/users'));
-app.use('/chats', require('./routes/chats'));
-app.use('/messages', require('./routes/messages'));
-app.use('/files', require('./routes/files'));
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/chats', require('./routes/chats'));
+app.use('/api/messages', require('./routes/messages'));
+app.use('/api/files', require('./routes/files'));
 
 app.use((err, req, res, next) => {
   console.error(err.stack);

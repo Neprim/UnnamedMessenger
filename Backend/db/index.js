@@ -13,6 +13,7 @@ function initializeDatabase() {
       username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       public_key TEXT NOT NULL,
+      salt TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now'))
     );
 

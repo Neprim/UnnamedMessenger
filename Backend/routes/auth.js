@@ -2,10 +2,15 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const db = require('../db');
 const config = require('../config');
 
 const router = express.Router();
+
+function generateSalt() {
+  return crypto.randomBytes(32).toString('base64');
+}
 
 router.post('/register', async (req, res) => {
   try {
@@ -21,9 +26,10 @@ router.post('/register', async (req, res) => {
     }
     
     const passwordHash = await bcrypt.hash(password, 10);
+    const salt = generateSalt();
     const userId = uuidv4();
     
-    db.prepare('INSERT INTO users (id, username, password_hash, public_key) VALUES (?, ?, ?, ?)').run(userId, username, passwordHash, publicKey);
+    db.prepare('INSERT INTO users (id, username, password_hash, public_key, salt) VALUES (?, ?, ?, ?, ?)').run(userId, username, passwordHash, publicKey, salt);
     
     const token = jwt.sign({ userId }, config.jwt.secret, { expiresIn: config.jwt.maxAge });
     
@@ -33,7 +39,7 @@ router.post('/register', async (req, res) => {
       sameSite: 'strict'
     });
     
-    res.status(201).json({ id: userId, username });
+    res.status(201).json({ id: userId, username, salt });
   } catch (err) {
     console.error('Register error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -48,7 +54,7 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Missing credentials' });
     }
     
-    const user = db.prepare('SELECT id, username, password_hash FROM users WHERE username = ?').get(username);
+    const user = db.prepare('SELECT id, username, password_hash, salt FROM users WHERE username = ?').get(username);
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -66,7 +72,7 @@ router.post('/login', async (req, res) => {
       sameSite: 'strict'
     });
     
-    res.json({ id: user.id, username });
+    res.json({ id: user.id, username, salt: user.salt });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Internal server error' });
