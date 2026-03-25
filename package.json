@@ -1,0 +1,34 @@
+{
+  "name": "unnamedmessenger",
+  "version": "1.0.0",
+  "description": "Самописная общалка с повышенной защитой",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Neprim/UnnamedMessenger.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Neprim/UnnamedMessenger/issues"
+  },
+  "homepage": "https://github.com/Neprim/UnnamedMessenger#readme",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "better-sqlite3": "^12.8.0",
+    "body-parser": "^2.2.2",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "swagger-node": "^0.8.4",
+    "swagger-node-express": "^2.1.3",
+    "swagger-ui-express": "^5.0.1",
+    "uuid": "^13.0.0"
+  }
+}
