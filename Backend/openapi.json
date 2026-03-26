@@ -148,7 +148,7 @@
           }
         }
       },
-      "put": {
+      "patch": {
         "summary": "Update current user",
         "tags": ["Users"],
         "security": [
@@ -164,9 +164,6 @@
                 "type": "object",
                 "properties": {
                   "username": {
-                    "type": "string"
-                  },
-                  "publicKey": {
                     "type": "string"
                   }
                 }

@@ -10,6 +10,13 @@
   let chatList: Chat[] = [];
   let loading = true;
   let showCreateModal = false;
+  let showSettingsModal = false;
+  let showUsernameModal = false;
+  let showExportKeyModal = false;
+  let exportConfirmChecked = false;
+  let exportingKey = false;
+  let newUsername = '';
+  let updatingUsername = false;
   let newChatName = '';
   let newChatType: 'pm' | 'gm' = 'gm';
   let creatingChat = false;
@@ -384,12 +391,56 @@
     auth.logout();
     push('/login');
   }
+
+  async function handleUpdateUsername() {
+    if (!newUsername.trim() || updatingUsername) return;
+    updatingUsername = true;
+    try {
+      const updatedUser = await api.users.update({ username: newUsername.trim() });
+      auth.updateUser({ username: updatedUser.username });
+      showUsernameModal = false;
+      newUsername = '';
+    } catch (e) {
+      console.error('Failed to update username:', e);
+    } finally {
+      updatingUsername = false;
+    }
+  }
+
+  async function handleExportPrivateKey() {
+    if (exportingKey || !exportConfirmChecked) return;
+    exportingKey = true;
+    try {
+      const encryptedPrivateKey = localStorage.getItem('encryptedPrivateKey');
+      if (!encryptedPrivateKey) {
+        throw new Error('Encrypted private key not found');
+      }
+      
+      const blob = new Blob([encryptedPrivateKey], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `private_key_${$auth.user?.username || 'user'}.key`;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      showExportKeyModal = false;
+      exportConfirmChecked = false;
+    } catch (e) {
+      console.error('Failed to export private key:', e);
+    } finally {
+      exportingKey = false;
+    }
+  }
 </script>
 
 <div class="layout">
   <aside class="sidebar">
     <header>
-      <h2>Chats</h2>
+      <div class="header-left">
+        <button class="icon-btn" on:click={() => showSettingsModal = true} title="Settings">⚙️</button>
+        <h2>Chats</h2>
+      </div>
       <div class="header-actions">
         <button class="icon-btn" on:click={() => showCreateModal = true} title="New Chat">+</button>
         <button class="icon-btn logout" on:click={handleLogout} title="Logout">↪</button>
@@ -502,6 +553,77 @@
   </div>
 {/if}
 
+{#if showSettingsModal}
+  <div class="modal-overlay" on:click={() => showSettingsModal = false}>
+    <div class="modal" on:click|stopPropagation>
+      <h3>Настройки</h3>
+      <div class="settings-list">
+        <button class="settings-btn" on:click={() => { showUsernameModal = true; showSettingsModal = false; }}>Изменить имя пользователя</button>
+        <button class="settings-btn" disabled>Изменить аватар</button>
+        <button class="settings-btn" disabled>Изменить пароль</button>
+        <button class="settings-btn" on:click={() => { showExportKeyModal = true; showSettingsModal = false; }}>Экспорт приватного ключа</button>
+        <button class="settings-btn danger" disabled>Удалить аккаунт</button>
+      </div>
+      <div class="modal-actions">
+        <button on:click={() => showSettingsModal = false}>Закрыть</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showUsernameModal}
+  <div class="modal-overlay" on:click={() => showUsernameModal = false}>
+    <div class="modal" on:click|stopPropagation>
+      <h3>Изменить имя пользователя</h3>
+      <div class="field">
+        <label for="newUsername">Новое имя</label>
+        <input 
+          type="text" 
+          id="newUsername" 
+          bind:value={newUsername} 
+          placeholder="Введите новое имя..."
+        />
+      </div>
+      <div class="modal-actions">
+        <button on:click={() => { showUsernameModal = false; newUsername = ''; }}>Отмена</button>
+        <button 
+          class="primary" 
+          on:click={handleUpdateUsername}
+          disabled={updatingUsername || !newUsername.trim()}
+        >
+          {updatingUsername ? 'Сохранение...' : 'Сохранить'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showExportKeyModal}
+  <div class="modal-overlay" on:click={() => showExportKeyModal = false}>
+    <div class="modal" on:click|stopPropagation>
+      <h3>Экспорт приватного ключа</h3>
+      <div class="warning-box">
+        ⚠️ Сохраните этот ключ в надёжном месте. С его помощью можно получить доступ к вашему аккаунту с другого устройства.
+      </div>
+      <p class="modal-desc">Этот ключ может использоваться для входа в аккаунт на другом устройстве.</p>
+      <label class="checkbox-label">
+        <input type="checkbox" bind:checked={exportConfirmChecked} />
+        <span>Я понимаю риски и хочу экспортировать ключ</span>
+      </label>
+      <div class="modal-actions">
+        <button on:click={() => { showExportKeyModal = false; exportConfirmChecked = false; }}>Отмена</button>
+        <button 
+          class="primary" 
+          on:click={handleExportPrivateKey}
+          disabled={exportingKey || !exportConfirmChecked}
+        >
+          {exportingKey ? 'Экспорт...' : 'Скачать'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .layout {
     display: flex;
@@ -524,6 +646,12 @@
     padding: 16px 20px;
     border-bottom: 1px solid #e0e0e0;
     background: #fff;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
 
   .sidebar h2 {
@@ -762,5 +890,72 @@
   .search-result.selected {
     background: #e3f2fd;
     font-weight: 600;
+  }
+
+  .settings-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .settings-btn {
+    padding: 14px 18px;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    background: #fafafa;
+    cursor: pointer;
+    font-size: 15px;
+    text-align: left;
+    transition: background 0.2s;
+    color: #666;
+  }
+
+  .settings-btn:hover:not(:disabled) {
+    background: #f0f0f0;
+  }
+
+  .settings-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .settings-btn.danger {
+    color: #f44336;
+    border-color: #ffcdd2;
+  }
+
+  .settings-btn.danger:hover:not(:disabled) {
+    background: #ffebee;
+  }
+
+  .modal-desc {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 16px;
+    line-height: 1.4;
+  }
+
+  .warning-box {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 8px;
+    padding: 14px;
+    font-size: 14px;
+    color: #856404;
+    margin-bottom: 16px;
+  }
+
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    font-size: 14px;
+    margin-bottom: 20px;
+  }
+
+  .checkbox-label input {
+    width: 18px;
+    height: 18px;
   }
 </style>

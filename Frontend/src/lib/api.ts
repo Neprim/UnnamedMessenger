@@ -100,8 +100,8 @@ export const api = {
   users: {
     me: () => request<UserResponse>('/users/me'),
     
-    update: (data: { publicKey?: string }) => 
-      request<UserResponse>('/users/me', { method: 'PUT', body: JSON.stringify(data) }),
+    update: (data: { username: string }) => 
+      request<UserResponse>('/users/me', { method: 'PATCH', body: JSON.stringify(data) }),
     
     search: (query: string) => 
       request<{ id: string; username: string; publicKey: string }[]>('/users/search?q=' + encodeURIComponent(query))

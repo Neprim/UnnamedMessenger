@@ -24,36 +24,20 @@ router.get('/me', authenticate, (req, res) => {
   }
 });
 
-router.put('/me', authenticate, (req, res) => {
+router.patch('/me', authenticate, (req, res) => {
   try {
-    const { username, publicKey } = req.body;
+    const { username } = req.body;
     
-    if (!username && !publicKey) {
+    if (!username) {
       return res.status(400).json({ error: 'No fields to update' });
     }
     
-    if (username) {
-      const existing = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, req.userId);
-      if (existing) {
-        return res.status(409).json({ error: 'Username already taken' });
-      }
+    const existing = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, req.userId);
+    if (existing) {
+      return res.status(409).json({ error: 'Username already taken' });
     }
     
-    const updates = [];
-    const params = [];
-    
-    if (username) {
-      updates.push('username = ?');
-      params.push(username);
-    }
-    if (publicKey) {
-      updates.push('public_key = ?');
-      params.push(publicKey);
-    }
-    
-    params.push(req.userId);
-    
-    db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+    db.prepare('UPDATE users SET username = ? WHERE id = ?').run(username, req.userId);
     
     const user = db.prepare('SELECT id, username, public_key FROM users WHERE id = ?').get(req.userId);
     

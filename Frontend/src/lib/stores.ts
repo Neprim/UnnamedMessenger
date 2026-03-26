@@ -50,6 +50,13 @@ function createAuthStore() {
     setPrivateKey: (privateKey: CryptoKey) => {
       update(state => ({ ...state, privateKey }));
     },
+    updateUser: (updates: Partial<User>) => {
+      localStorage.setItem('username', updates.username || '');
+      update(state => ({
+        ...state,
+        user: state.user ? { ...state.user, ...updates } : null
+      }));
+    },
     logout: () => {
       localStorage.removeItem('username');
       localStorage.removeItem('privateKey');

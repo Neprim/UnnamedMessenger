@@ -54,7 +54,7 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Missing credentials' });
     }
     
-    const user = db.prepare('SELECT id, username, password_hash, salt FROM users WHERE username = ?').get(username);
+    const user = db.prepare('SELECT id, username, password_hash, salt, public_key FROM users WHERE username = ?').get(username);
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -72,7 +72,7 @@ router.post('/login', async (req, res) => {
       sameSite: 'strict'
     });
     
-    res.json({ id: user.id, username, salt: user.salt, token });
+    res.json({ id: user.id, username, salt: user.salt, publicKey: user.public_key, token });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Internal server error' });

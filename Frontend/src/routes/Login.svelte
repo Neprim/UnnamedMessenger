@@ -8,6 +8,9 @@
   let password = '';
   let loading = false;
   let error = '';
+  let keyFile: File | null = null;
+
+  $: hasEncryptedKey = localStorage.getItem('encryptedPrivateKey') !== null;
 
   async function handleLogin() {
     if (!username || !password) {
@@ -19,10 +22,12 @@
     error = '';
 
     try {
-      const { salt, id, token } = await api.auth.login({ username, password });
+      const { salt, id, token, publicKey } = await api.auth.login({ username, password });
       
       setToken(token);
       localStorage.setItem('token', token);
+      localStorage.setItem('username', username);
+      localStorage.setItem('publicKey', publicKey);
 
       const encryptedPrivateKey = localStorage.getItem('encryptedPrivateKey');
       if (!encryptedPrivateKey) {
@@ -34,15 +39,14 @@
       const saltBytes = Uint8Array.from(atob(salt), c => c.charCodeAt(0));
       const privateKey = await crypto.decryptPrivateKey(encryptedPrivateKey, password, saltBytes);
 
-      const user = await api.users.me();
-      const publicKey = await crypto.importPublicKey(user.publicKey);
+      const publicKeyObj = await crypto.importPublicKey(publicKey);
 
       const exportedPrivateKey = await window.crypto.subtle.exportKey('pkcs8', privateKey);
       const privateKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(exportedPrivateKey)));
       localStorage.setItem('privateKey', privateKeyBase64);
 
       auth.setUser(
-        { id: user.id, username: user.username, publicKey: user.publicKey },
+        { id, username, publicKey },
         privateKey
       );
 
@@ -53,10 +57,33 @@
       loading = false;
     }
   }
+
+  async function handleKeyUpload(event: Event) {
+    const target = event.target as HTMLInputElement;
+    const file = target.files?.[0];
+    if (!file) return;
+
+    try {
+      const content = await file.text();
+      localStorage.setItem('encryptedPrivateKey', content);
+      hasEncryptedKey = true;
+    } catch (e) {
+      error = 'Failed to load key file';
+    }
+  }
 </script>
 
 <div class="container">
   <h1>Login</h1>
+  {#if !hasEncryptedKey}
+    <div class="warning-box">
+      На этом устройстве не сохранён ключ. Вы можете загрузить ранее сохранённый файл ключа.
+    </div>
+    <div class="field">
+      <label for="keyFile">Загрузить ключ</label>
+      <input type="file" id="keyFile" accept=".key" on:change={handleKeyUpload} />
+    </div>
+  {/if}
   <form on:submit|preventDefault={handleLogin}>
     <div class="field">
       <label for="username">Username</label>
@@ -138,5 +165,15 @@
   a {
     color: #2196F3;
     font-weight: 600;
+  }
+  .warning-box {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 8px;
+    padding: 14px;
+    font-size: 14px;
+    color: #856404;
+    margin-bottom: 20px;
+    text-align: center;
   }
 </style>
