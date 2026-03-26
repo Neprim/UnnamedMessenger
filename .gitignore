@@ -1,3 +1,6 @@
+Backend/messenger.db
+Backend/messenger.db-*
+
 # Logs
 logs
 *.log
