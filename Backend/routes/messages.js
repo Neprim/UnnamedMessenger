@@ -2,8 +2,18 @@ const express = require('express');
 const db = require('../db');
 const { authenticate } = require('../middleware/auth');
 const config = require('../config');
+const sse = require('../sse');
 
 const router = express.Router();
+
+function broadcastToChatMembers(chatId, eventType, data, excludeUserId = null) {
+  const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
+  members.forEach(member => {
+    if (member.user_id !== excludeUserId) {
+      sse.broadcast(member.user_id, { type: eventType, data });
+    }
+  });
+}
 
 router.put('/:messageId', authenticate, (req, res) => {
   try {
@@ -35,14 +45,18 @@ router.put('/:messageId', authenticate, (req, res) => {
     
     const updated = db.prepare('SELECT id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE id = ?').get(req.params.messageId);
     
-    res.json({
+    const response = {
       id: updated.id,
       senderId: updated.sender_id,
       content: updated.content,
       fileIds: updated.file_ids ? JSON.parse(updated.file_ids) : [],
       timestamp: updated.timestamp,
       editedAt: updated.edited_at
-    });
+    };
+    
+    broadcastToChatMembers(message.chat_id, 'message_edited', response, req.userId);
+    
+    res.json(response);
   } catch (err) {
     console.error('Edit message error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -66,6 +80,8 @@ router.delete('/:messageId', authenticate, (req, res) => {
     }
     
     db.prepare('DELETE FROM messages WHERE id = ?').run(req.params.messageId);
+    
+    broadcastToChatMembers(message.chat_id, 'message_deleted', { messageId: req.params.messageId }, req.userId);
     
     res.json({ message: 'Message deleted' });
   } catch (err) {

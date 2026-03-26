@@ -1,7 +1,7 @@
 <script lang="ts">
   import { push } from 'svelte-spa-router';
   import * as crypto from '../lib/crypto';
-  import { api } from '../lib/api';
+  import { api, setToken } from '../lib/api';
   import { auth } from '../lib/stores';
 
   let username = '';
@@ -22,11 +22,14 @@
       const { publicKey, privateKey } = await crypto.generateKeyPair();
       const publicKeyExport = await crypto.exportPublicKey(publicKey);
 
-      const { salt } = await api.auth.register({
+      const { salt, token } = await api.auth.register({
         username,
         password,
         publicKey: publicKeyExport
       });
+
+      setToken(token);
+      localStorage.setItem('token', token);
 
       const saltBytes = Uint8Array.from(atob(salt), c => c.charCodeAt(0));
       const encoder = new TextEncoder();

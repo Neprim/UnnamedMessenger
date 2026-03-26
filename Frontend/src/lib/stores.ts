@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { setToken } from './api';
 
 export interface User {
   id: string;
@@ -52,12 +53,19 @@ function createAuthStore() {
     logout: () => {
       localStorage.removeItem('username');
       localStorage.removeItem('privateKey');
+      localStorage.removeItem('token');
+      setToken(null);
       set({ isAuthenticated: false, user: null, privateKey: null });
     },
     loadFromStorage: async () => {
       const username = localStorage.getItem('username');
       const publicKey = localStorage.getItem('publicKey');
+      const token = localStorage.getItem('token');
       const privateKey = await loadPrivateKeyFromStorage();
+      
+      if (token) {
+        setToken(token);
+      }
       
       if (username && publicKey) {
         try {
@@ -102,6 +110,17 @@ export interface Chat {
   name: string | null;
   memberCount: number;
   chatKey?: CryptoKey;
+  members?: string[];
+  lastMessage?: {
+    senderId: string | null;
+    content: string;
+    senderUsername?: string;
+    isSystem: boolean;
+  } | null;
+  otherUser?: {
+    id: string;
+    username: string;
+  } | null;
 }
 
 function createChatsStore() {
@@ -111,6 +130,13 @@ function createChatsStore() {
     subscribe,
     set,
     addChat: (chat: Chat) => update(chats => [...chats, chat]),
+    removeChat: (chatId: string) => update(chats => chats.filter(c => c.id !== chatId)),
+    updateChat: (chatId: string, updates: Partial<Chat>) => {
+      update(chats => chats.map(c => c.id === chatId ? { ...c, ...updates } : c));
+    },
+    updateMemberCount: (chatId: string, count: number) => {
+      update(chats => chats.map(c => c.id === chatId ? { ...c, memberCount: count } : c));
+    },
     setChatKey: (chatId: string, chatKey: CryptoKey) => {
       update(chats => chats.map(c => c.id === chatId ? { ...c, chatKey } : c));
     }

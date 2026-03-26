@@ -1,13 +1,19 @@
 const API_BASE = '/api';
 
+let authToken: string | null = null;
+
+export function setToken(token: string | null) {
+  authToken = token;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
       ...options.headers
-    },
-    credentials: 'include'
+    }
   });
 
   if (!response.ok) {
@@ -28,6 +34,7 @@ export interface RegisterResponse {
   id: string;
   username: string;
   salt: string;
+  token: string;
 }
 
 export interface LoginRequest {
@@ -39,6 +46,7 @@ export interface LoginResponse {
   id: string;
   username: string;
   salt: string;
+  token: string;
 }
 
 export interface UserResponse {
@@ -70,7 +78,7 @@ export interface ChatDetail {
 
 export interface Message {
   id: string;
-  senderId: string;
+  senderId: string | null;
   content: string;
   fileIds: string[];
   timestamp: string;
@@ -110,6 +118,9 @@ export const api = {
     delete: (chatId: string) => 
       request<{ message: string }>(`/chats/${chatId}`, { method: 'DELETE' }),
     
+    leave: (chatId: string) => 
+      request<{ message: string }>(`/chats/${chatId}/leave`, { method: 'POST' }),
+    
     addMember: (chatId: string, userId: string, encryptedKey: string) => 
       request<{ message: string }>(`/chats/${chatId}/members/add`, { 
         method: 'POST', 
@@ -122,10 +133,8 @@ export const api = {
         body: JSON.stringify({ userId }) 
       }),
     
-    getMessages: (chatId: string, cursor?: string) => {
-      const url = cursor 
-        ? `/chats/${chatId}/messages?cursor=${encodeURIComponent(cursor)}&limit=50`
-        : `/chats/${chatId}/messages?limit=50`;
+    getMessages: (chatId: string, limit: number = 50) => {
+      const url = `/chats/${chatId}/messages?limit=${limit}`;
       return request<{ messages: Message[]; nextCursor: string | null }>(url);
     },
     

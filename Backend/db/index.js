@@ -39,13 +39,13 @@ function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       chat_id TEXT NOT NULL,
-      sender_id TEXT NOT NULL,
+      sender_id TEXT,
       content TEXT,
       file_ids TEXT,
       timestamp TEXT DEFAULT (datetime('now')),
       edited_at TEXT,
       FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
-      FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+      FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE SET NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);

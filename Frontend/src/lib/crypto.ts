@@ -142,14 +142,40 @@ export async function importChatKey(keyData: string): Promise<CryptoKey> {
   );
 }
 
+function padWithSalt(message: string): string {
+  const messageWithNull = message + '\0';
+  const currentLength = messageWithNull.length;
+  const targetLength = Math.ceil(currentLength / 64) * 64;
+  const paddingLength = targetLength - currentLength;
+  
+  const randomBytes = crypto.getRandomValues(new Uint8Array(paddingLength));
+  const padding = btoa(String.fromCharCode(...randomBytes));
+  
+  return padding + '\0' + message;
+}
+
+function extractMessage(decrypted: Uint8Array): string {
+  const decoder = new TextDecoder();
+  const decryptedStr = decoder.decode(decrypted);
+  const nullIndex = decryptedStr.indexOf('\0');
+  
+  if (nullIndex === -1) {
+    return decryptedStr;
+  }
+  
+  return decryptedStr.substring(nullIndex + 1);
+}
+
 export async function encryptMessage(chatKey: CryptoKey, message: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
+  
+  const paddedMessage = padWithSalt(message);
   const encoder = new TextEncoder();
   
   const encrypted = await crypto.subtle.encrypt(
     { name: ALGORITHM_AES, iv },
     chatKey,
-    encoder.encode(message)
+    encoder.encode(paddedMessage)
   );
 
   const combined = new Uint8Array(iv.length + encrypted.byteLength);
@@ -170,8 +196,7 @@ export async function decryptMessage(chatKey: CryptoKey, encryptedData: string):
     encrypted
   );
 
-  const decoder = new TextDecoder();
-  return decoder.decode(decrypted);
+  return extractMessage(decrypted);
 }
 
 export async function encryptChatKeyWithPublicKey(chatKey: CryptoKey, publicKey: CryptoKey): Promise<string> {

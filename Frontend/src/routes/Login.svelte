@@ -1,7 +1,7 @@
 <script lang="ts">
   import { push } from 'svelte-spa-router';
   import * as crypto from '../lib/crypto';
-  import { api } from '../lib/api';
+  import { api, setToken } from '../lib/api';
   import { auth } from '../lib/stores';
 
   let username = '';
@@ -19,8 +19,11 @@
     error = '';
 
     try {
-      const { salt, id } = await api.auth.login({ username, password });
+      const { salt, id, token } = await api.auth.login({ username, password });
       
+      setToken(token);
+      localStorage.setItem('token', token);
+
       const encryptedPrivateKey = localStorage.getItem('encryptedPrivateKey');
       if (!encryptedPrivateKey) {
         error = 'No saved keys found. Please register first.';

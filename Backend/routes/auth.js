@@ -39,7 +39,7 @@ router.post('/register', async (req, res) => {
       sameSite: 'strict'
     });
     
-    res.status(201).json({ id: userId, username, salt });
+    res.status(201).json({ id: userId, username, salt, token });
   } catch (err) {
     console.error('Register error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -72,7 +72,7 @@ router.post('/login', async (req, res) => {
       sameSite: 'strict'
     });
     
-    res.json({ id: user.id, username, salt: user.salt });
+    res.json({ id: user.id, username, salt: user.salt, token });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Internal server error' });

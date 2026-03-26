@@ -5,7 +5,8 @@ module.exports = {
   },
   cookie: {
     name: 'token',
-    maxAge: 30 * 24 * 60 * 60 * 1000
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    httpOnly: false
   },
   limits: {
     maxMessageLength: 10000
