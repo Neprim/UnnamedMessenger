@@ -5,6 +5,7 @@ const cookieParser = require('cookie-parser');
 const swaggerUi = require('swagger-ui-express');
 const fs = require('fs');
 const path = require('path');
+process.loadEnvFile(".env")
 
 const app = express();
 
