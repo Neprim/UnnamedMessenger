@@ -8,8 +8,10 @@ const path = require('path');
 
 const app = express();
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: isProduction ? false : 'http://localhost:5173',
   credentials: true
 }));
 app.use(bodyParser.json());
@@ -19,10 +21,6 @@ app.use(cookieParser());
 const openApiSpec = JSON.parse(fs.readFileSync(path.join(__dirname, 'openapi.json'), 'utf8'));
 
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openApiSpec));
-
-app.get('/', (req, res) => {
-  res.send('UnnamedMessenger API');
-});
 
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
@@ -51,7 +49,7 @@ app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173');
+  res.setHeader('Access-Control-Allow-Origin', isProduction ? '*' : 'http://localhost:5173');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
 
   try {
@@ -70,6 +68,14 @@ app.get('/api/events', (req, res) => {
     res.status(401).end('Unauthorized');
   }
 });
+
+const distPath = path.join(__dirname, 'dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get('/*splat', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
