@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { authenticate } = require('../middleware/auth');
+const config = require('../config');
 
 const router = express.Router();
 
@@ -30,6 +31,10 @@ router.patch('/me', authenticate, (req, res) => {
     
     if (!username) {
       return res.status(400).json({ error: 'No fields to update' });
+    }
+    
+    if (username.length > config.limits.maxUsernameLength) {
+      return res.status(400).json({ error: `Username exceeds ${config.limits.maxUsernameLength} characters` });
     }
     
     const existing = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, req.userId);

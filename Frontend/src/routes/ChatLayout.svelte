@@ -576,6 +576,7 @@
           type="text" 
           id="newUsername" 
           bind:value={newUsername} 
+          maxlength="30"
           placeholder="Введите новое имя..."
         />
       </div>

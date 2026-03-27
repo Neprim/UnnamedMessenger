@@ -9,6 +9,7 @@ module.exports = {
     httpOnly: false
   },
   limits: {
-    maxMessageLength: 10000
+    maxMessageLength: 15000,
+    maxUsernameLength: 30
   }
 };

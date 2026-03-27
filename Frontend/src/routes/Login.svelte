@@ -118,7 +118,7 @@
   <form on:submit|preventDefault={handleLogin}>
     <div class="field">
       <label for="username">Имя пользователя</label>
-      <input type="text" id="username" bind:value={username} disabled={loading} />
+      <input type="text" id="username" bind:value={username} maxlength="30" disabled={loading} />
     </div>
     <div class="field">
       <label for="password">Пароль</label>
