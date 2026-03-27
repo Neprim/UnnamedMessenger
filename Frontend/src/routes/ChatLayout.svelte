@@ -407,8 +407,8 @@
       if (oldEncryptedKey && $auth.privateKey) {
         const derivedKey = await crypto.deriveKey(newPassword, Uint8Array.from(atob(salt), c => c.charCodeAt(0)));
         const exportedKey = await window.crypto.subtle.exportKey('pkcs8', $auth.privateKey);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, derivedKey, exportedKey);
+        const iv = window.crypto.getRandomValues(new Uint8Array(12));
+        const encrypted = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, derivedKey, exportedKey);
         const combined = new Uint8Array(iv.length + encrypted.byteLength);
         combined.set(iv);
         combined.set(new Uint8Array(encrypted), iv.length);

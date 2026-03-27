@@ -1,5 +1,6 @@
 Backend/messenger.db
 Backend/messenger.db-*
+Backend/ssl/
 
 # Logs
 logs

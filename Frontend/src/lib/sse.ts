@@ -65,7 +65,7 @@ function handleSSEEvent(event: SSEEvent) {
       break;
     }
     case 'message_deleted': {
-      sseMessage.set({ chatId: '', message: { id: event.data.messageId } as Message });
+      sseMessage.set({ chatId: event.data.chatId, message: { id: event.data.messageId } as Message });
       break;
     }
     case 'message_edited': {

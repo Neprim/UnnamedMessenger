@@ -136,6 +136,21 @@
       const encryptedContent = await crypto.encryptMessage(chatKey, editingText);
       const updated = await api.messages.edit(editingMessage.id, encryptedContent);
       messages = messages.map(m => m.id === updated.id ? { ...m, content: editingText, editedAt: updated.editedAt } : m);
+      
+      // Update lastMessage if edited message was the last
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg && lastMsg.id === updated.id) {
+        const sender = chatDetail?.members?.find((m: any) => m.id === lastMsg.senderId);
+        chats.updateChat(params.id, {
+          lastMessage: {
+            senderId: lastMsg.senderId,
+            content: editingText,
+            senderUsername: sender?.username || '',
+            isSystem: false
+          }
+        });
+      }
+      
       editingMessage = null;
       editingText = '';
     } catch (e) {
@@ -165,7 +180,7 @@
       initialized = true;
     }, 5000);
 
-    unsubscribeSSE = sseMessage.subscribe(event => {
+    unsubscribeSSE = sseMessage.subscribe(async event => {
       if (!event) return;
       
       console.log('SSE event received:', event.chatId, event.message.id, event.message.editedAt);
@@ -184,6 +199,20 @@
             console.log('Decrypted:', decrypted);
             messages = messages.map(m => m.id === msg.id ? { ...m, content: decrypted, editedAt: msg.editedAt } : m);
             console.log('Updated messages count:', messages.length);
+            
+            // Update lastMessage in chat list
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg && lastMsg.id === msg.id) {
+              const sender = chatDetail?.members?.find((m: any) => m.id === lastMsg.senderId);
+              chats.updateChat(params.id, {
+                lastMessage: {
+                  senderId: lastMsg.senderId,
+                  content: decrypted,
+                  senderUsername: sender?.username || '',
+                  isSystem: false
+                }
+              });
+            }
           }).catch(err => {
             console.error('Decrypt failed:', err);
             messages = messages.map(m => m.id === msg.id ? { ...m, content: '[Decryption failed]', editedAt: msg.editedAt } : m);
@@ -196,7 +225,44 @@
         const existingMsg = messages.find(m => m.id === msg.id);
         if (existingMsg) {
           // Delete message
+          const wasLastMessage = messages[messages.length - 1]?.id === msg.id;
           messages = messages.filter(m => m.id !== msg.id);
+          
+          // Update lastMessage in chat list if deleted message was the last
+          if (wasLastMessage) {
+            // Load previous message
+            if (chatKey) {
+              try {
+                const result = await api.chats.getMessages(params.id, 20);
+                if (result.messages && result.messages.length > 0) {
+                  const lastMsg = result.messages[result.messages.length - 1];
+                  if (lastMsg.senderId === null) {
+                    const parsed = JSON.parse(lastMsg.content || '{}');
+                    const systemContent = parsed.event === 'personal_chat_created' ? 'Личный чат создан' : 
+                                          parsed.event === 'member_added' ? `${parsed.username} добавлен в чат` :
+                                          parsed.event === 'member_removed' ? `${parsed.username} удалён из чата` :
+                                          parsed.event === 'member_left' ? `${parsed.username} покинул чат` : '';
+                    chats.updateChat(params.id, {
+                      lastMessage: { senderId: null, content: systemContent, isSystem: true }
+                    });
+                  } else {
+                    const decrypted = await crypto.decryptMessage(chatKey, lastMsg.content);
+                    const sender = chatDetail?.members?.find((m: any) => m.id === lastMsg.senderId);
+                    chats.updateChat(params.id, {
+                      lastMessage: { senderId: lastMsg.senderId, content: decrypted, senderUsername: sender?.username || '', isSystem: false }
+                    });
+                  }
+                } else {
+                  chats.updateChat(params.id, { lastMessage: null });
+                }
+              } catch (e) {
+                console.error('Failed to load last message:', e);
+                chats.updateChat(params.id, { lastMessage: null });
+              }
+            } else {
+              chats.updateChat(params.id, { lastMessage: null });
+            }
+          }
         } else {
           // New message - use handleNewEvent
           handleNewEvent(msg);
@@ -400,7 +466,37 @@
   async function handleDeleteMessage(messageId: string) {
     try {
       await api.messages.delete(messageId);
+      const wasLastMessage = messages[messages.length - 1]?.id === messageId;
       messages = messages.filter(m => m.id !== messageId);
+      
+      // Update lastMessage if deleted message was the last
+      if (wasLastMessage) {
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg) {
+          if (lastMsg.senderId === null) {
+            const parsed = JSON.parse(lastMsg.content || '{}');
+            const systemContent = parsed.event === 'personal_chat_created' ? 'Личный чат создан' : 
+                                  parsed.event === 'member_added' ? `${parsed.username} добавлен в чат` :
+                                  parsed.event === 'member_removed' ? `${parsed.username} удалён из чата` :
+                                  parsed.event === 'member_left' ? `${parsed.username} покинул чат` : '';
+            chats.updateChat(params.id, {
+              lastMessage: { senderId: null, content: systemContent, isSystem: true }
+            });
+          } else {
+            const sender = chatDetail?.members?.find((m: any) => m.id === lastMsg.senderId);
+            chats.updateChat(params.id, {
+              lastMessage: {
+                senderId: lastMsg.senderId,
+                content: lastMsg.content,
+                senderUsername: sender?.username || '',
+                isSystem: false
+              }
+            });
+          }
+        } else {
+          chats.updateChat(params.id, { lastMessage: null });
+        }
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Не удалось удалить сообщение';
     }

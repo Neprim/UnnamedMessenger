@@ -85,7 +85,7 @@
 </script>
 
 <div class="container">
-  <h1>Login</h1>
+  <h1>Вход</h1>
   {#if !hasEncryptedKey}
     <div class="warning-box">
       На этом устройстве не сохранён ключ. Вы можете загрузить ранее сохранённый файл ключа.

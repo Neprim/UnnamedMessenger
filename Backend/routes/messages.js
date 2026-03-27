@@ -83,7 +83,7 @@ router.delete('/:messageId', authenticate, (req, res) => {
     
     db.prepare('DELETE FROM messages WHERE id = ?').run(req.params.messageId);
     
-    broadcastToChatMembers(message.chat_id, 'message_deleted', { messageId: req.params.messageId }, req.userId);
+    broadcastToChatMembers(message.chat_id, 'message_deleted', { messageId: req.params.messageId, chatId: message.chat_id }, req.userId);
     
     res.json({ message: 'Message deleted' });
   } catch (err) {

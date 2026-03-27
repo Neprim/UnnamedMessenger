@@ -3,6 +3,7 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const swaggerUi = require('swagger-ui-express');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 process.loadEnvFile(".env")
@@ -12,7 +13,7 @@ const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
 
 app.use(cors({
-  origin: isProduction ? false : 'http://localhost:5173',
+  origin: isProduction ? process.env.URL : 'http://localhost:5173',
   credentials: true
 }));
 app.use(bodyParser.json());
@@ -83,9 +84,20 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+const httpsOptions = {                                               
+  key: fs.readFileSync(path.join(__dirname, 'ssl/server.key')),      
+  cert: fs.readFileSync(path.join(__dirname, 'ssl/server.crt'))      
+}; 
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+if (isProduction) {
+  https.createServer(httpsOptions, app).listen(PORT, () => {           
+    console.log(`Server running on port ${PORT} (HTTPS)`);             
+  }); 
+} else {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
 
 module.exports = app;

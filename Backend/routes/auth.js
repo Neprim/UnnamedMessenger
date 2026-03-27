@@ -39,6 +39,8 @@ router.post('/register', async (req, res) => {
       maxAge: config.cookie.maxAge,
       sameSite: 'strict'
     });
+
+    console.log(`Пользователь "${username}" зарегистрировался.`)
     
     res.status(201).json({ id: userId, username, salt, token });
   } catch (err) {

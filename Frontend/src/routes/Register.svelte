@@ -58,7 +58,7 @@
 </script>
 
 <div class="container">
-  <h1>Register</h1>
+  <h1>Регистрация</h1>
   <form on:submit|preventDefault={handleRegister}>
     <div class="field">
       <label for="username">Имя пользователя</label>
