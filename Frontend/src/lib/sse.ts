@@ -11,6 +11,8 @@ export const sseEvents = writable<SSEEvent | null>(null);
 
 export const newMessages = writable<{ chatId: string; message: Message }[]>([]);
 
+export const editedMessages = writable<Message[]>([]);
+
 export const memberEvents = writable<{ type: string; chatId: string; userId: string; memberCount: number; removed?: boolean }[]>([]);
 
 export const chatDeletedEvents = writable<string[]>([]);
@@ -74,7 +76,8 @@ function handleSSEEvent(event: SSEEvent) {
       break;
     }
     case 'message_edited': {
-      newMessages.update(msgs => [...msgs, { chatId: '', message: event.data as Message }]);
+      const message: Message = event.data;
+      newMessages.update(msgs => [...msgs, { chatId: message.chatId, message }]);
       break;
     }
     case 'member_added':

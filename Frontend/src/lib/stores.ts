@@ -76,7 +76,7 @@ function createAuthStore() {
       }));
     },
     logout: () => {
-      localStorage.removeItem('token');
+      sessionStorage.removeItem('token');
       sessionStorage.removeItem('username');
       sessionStorage.removeItem('publicKey');
       sessionStorage.removeItem('privateKey');

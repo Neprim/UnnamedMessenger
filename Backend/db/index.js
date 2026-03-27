@@ -14,7 +14,7 @@ function initializeDatabase() {
       password_hash TEXT NOT NULL,
       public_key TEXT NOT NULL,
       salt TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at INTEGER DEFAULT (strftime('%s', 'now'))
     );
 
     CREATE TABLE IF NOT EXISTS chats (
@@ -22,7 +22,7 @@ function initializeDatabase() {
       type TEXT NOT NULL CHECK(type IN ('pm', 'gm')),
       name TEXT,
       created_by TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
+      created_at INTEGER DEFAULT (strftime('%s', 'now')),
       FOREIGN KEY (created_by) REFERENCES users(id)
     );
 
@@ -30,7 +30,7 @@ function initializeDatabase() {
       chat_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       encrypted_chat_key TEXT,
-      joined_at TEXT DEFAULT (datetime('now')),
+      joined_at INTEGER DEFAULT (strftime('%s', 'now')),
       PRIMARY KEY (chat_id, user_id),
       FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -42,8 +42,8 @@ function initializeDatabase() {
       sender_id TEXT,
       content TEXT,
       file_ids TEXT,
-      timestamp TEXT DEFAULT (datetime('now')),
-      edited_at TEXT,
+      timestamp INTEGER DEFAULT (strftime('%s', 'now')),
+      edited_at INTEGER,
       FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
       FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE SET NULL
     );

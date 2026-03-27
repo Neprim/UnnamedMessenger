@@ -22,6 +22,8 @@
   let addingMember = false;
   let otherUserName: string | null = null;
   let contextMenu: { x: number; y: number; messageId: string; senderId: string; visible: boolean } = { x: 0, y: 0, messageId: '', senderId: '', visible: false };
+  let editingMessage: { id: string; content: string } | null = null;
+  let editingText = '';
 
   $: isCreator = chatDetail?.createdBy === $auth.user?.id;
 
@@ -122,9 +124,35 @@
     closeContextMenu();
   }
 
+  function handleEditFromMenu(msg: Message) {
+    editingMessage = { id: msg.id, content: msg.content };
+    editingText = msg.content;
+    closeContextMenu();
+  }
+
+  async function handleEditMessage() {
+    if (!editingMessage || !editingText.trim() || !chatKey) return;
+    try {
+      const encryptedContent = await crypto.encryptMessage(chatKey, editingText);
+      const updated = await api.messages.edit(editingMessage.id, encryptedContent);
+      messages = messages.map(m => m.id === updated.id ? { ...m, content: editingText, editedAt: updated.editedAt } : m);
+      editingMessage = null;
+      editingText = '';
+    } catch (e) {
+      console.error('Failed to edit message:', e);
+    }
+  }
+
+  function cancelEdit() {
+    editingMessage = null;
+    editingText = '';
+  }
+
   let initialized = false;
 
   let unsubscribeSSE: () => void;
+  let processedEventIds = new Set<string>();
+  let processedEditIds = new Set<string>();
 
   onMount(() => {
     const checkAuth = setInterval(() => {
@@ -140,17 +168,56 @@
     }, 5000);
 
     unsubscribeSSE = newMessages.subscribe(events => {
-      const currentChatEvents = events.filter(e => e.chatId === params.id || e.chatId === '');
-      for (const event of currentChatEvents) {
+      console.log('newMessages store updated, events:', events.length, 'current chatId:', params.id);
+      console.log('Events:', events.map(e => ({ chatId: e.chatId, msgId: e.message.id, editedAt: e.message.editedAt })));
+      
+      const eventsToProcess = events.filter(e => e.chatId === params.id);
+      
+      console.log('Events to process:', eventsToProcess.length);
+      
+      for (const event of eventsToProcess) {
         const msg = event.message;
-        if (event.chatId === '' && msg.id) {
-          messages = messages.filter(m => m.id !== msg.id);
-        } else if (event.chatId === params.id) {
-          handleNewEvent(msg);
+        const isEdited = !!msg.editedAt;
+        
+        if (isEdited) {
+          if (processedEditIds.has(msg.id)) {
+            continue;
+          }
+          processedEditIds.add(msg.id);
+        } else {
+          if (processedEventIds.has(msg.id)) {
+            continue;
+          }
+          processedEventIds.add(msg.id);
         }
-      }
-      if (currentChatEvents.length > 0) {
-        newMessages.update(msgs => msgs.filter(e => e.chatId !== params.id && e.chatId !== ''));
+        
+        console.log('SSE event:', msg.id, 'editedAt:', msg.editedAt, 'content:', msg.content?.substring(0, 30));
+        
+        if (msg.editedAt) {
+          console.log('Processing edit for message:', msg.id);
+          if (chatKey) {
+            crypto.decryptMessage(chatKey, msg.content).then(decrypted => {
+              console.log('Decrypted:', decrypted);
+              messages = messages.map(m => m.id === msg.id ? { ...m, content: decrypted, editedAt: msg.editedAt } : m);
+              console.log('Updated messages count:', messages.length);
+            }).catch(err => {
+              console.error('Decrypt failed:', err);
+              messages = messages.map(m => m.id === msg.id ? { ...m, content: '[Decryption failed]', editedAt: msg.editedAt } : m);
+            });
+          } else {
+            console.log('No chatKey available');
+          }
+        } else {
+          // Check if this is a new message or delete
+          const existingMsg = messages.find(m => m.id === msg.id);
+          if (existingMsg) {
+            // Delete message
+            messages = messages.filter(m => m.id !== msg.id);
+          } else {
+            // New message - use handleNewEvent
+            handleNewEvent(msg);
+          }
+        }
       }
     });
   });
@@ -217,13 +284,14 @@
     chatDetail = null;
     messages = [];
     chatKey = null;
+    processedEventIds = new Set<string>();
+    processedEditIds = new Set<string>();
     
     const container = document.querySelector('.messages') as HTMLElement;
     if (container) container.scrollTop = 0;
 
-    if (!$auth.privateKey) {
+    if (!$auth.privateKey || $auth.isLoading) {
       loading = false;
-      setTimeout(loadChat, 100);
       return;
     }
 
@@ -455,34 +523,36 @@
         {#if group.isSystem}
           {@const systemData = (() => { try { return JSON.parse(group.messages[0].content || '{}'); } catch { return { event: 'unknown', raw: group.messages[0].content }; } })()}
           <div class="system-message">
-            {systemData.event === 'personal_chat_created' ? `Личный чат создан пользователем ${systemData.creatorUsername}` : 
-             systemData.event === 'member_added' ? `${systemData.username} добавлен в чат` : 
-             systemData.event === 'member_removed' ? `${systemData.username} удалён из чата` :
-             systemData.event === 'member_left' ? `${systemData.username} покинул чат` : systemData.raw || group.messages[0].content}
+            <span class="system-content">
+              {systemData.event === 'personal_chat_created' ? `Личный чат создан пользователем ${systemData.creatorUsername}` : 
+               systemData.event === 'member_added' ? `${systemData.username} добавлен в чат` : 
+               systemData.event === 'member_removed' ? `${systemData.username} удалён из чата` :
+               systemData.event === 'member_left' ? `${systemData.username} покинул чат` : systemData.raw || group.messages[0].content}
+            </span>
+            <span class="system-time" title={new Date(group.messages[0].timestamp * 1000).toLocaleString()}>
+              {new Date(group.messages[0].timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
           </div>
         {:else}
-          <div class="message-group" class:own={group.senderId === $auth.user?.id}>
-            <div class="message-header">
-              <div class="avatar">{group.senderUsername.charAt(0).toUpperCase()}</div>
-              <span class="sender-name">{group.senderUsername}</span>
-              <span class="message-time">{new Date(group.messages[0].timestamp).toLocaleTimeString()}</span>
-            </div>
-            {#each group.messages as msg, i}
-              <div class="message" class:own={msg.senderId === $auth.user?.id} on:contextmenu={(e) => handleContextMenu(e, msg.id, msg.senderId)}>
-                <div class="message-content">
-                  {msg.content}
-                </div>
-                {#if i === group.messages.length - 1}
-                  <div class="message-meta">
-                    {new Date(msg.timestamp).toLocaleTimeString()}
-                    {#if msg.editedAt}
-                      (edited)
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
+           <div class="message-group">
+             <div class="message-header">
+               <div class="avatar">{group.senderUsername.charAt(0).toUpperCase()}</div>
+               <span class="sender-name">{group.senderUsername}</span>
+             </div>
+             {#each group.messages as msg, i}
+               <div class="message" class:own={msg.senderId === $auth.user?.id} on:contextmenu={(e) => handleContextMenu(e, msg.id, msg.senderId)}>
+                 <div class="message-content">
+                   {msg.content}
+                 </div>
+                 <span class="msg-time" title={new Date(msg.timestamp * 1000).toLocaleString()}>
+                   {new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                   {#if msg.editedAt}
+                     <span class="edited" title={new Date(msg.editedAt * 1000).toLocaleString()}>(edited)</span>
+                   {/if}
+                 </span>
+               </div>
+             {/each}
+           </div>
         {/if}
       {/each}
     </div>
@@ -498,6 +568,19 @@
         {sending ? '...' : 'Send'}
       </button>
     </form>
+
+    {#if editingMessage}
+      <div class="edit-area">
+        <input 
+          type="text" 
+          bind:value={editingText} 
+          placeholder="Редактировать сообщение..."
+          on:keydown={(e) => { if (e.key === 'Enter') handleEditMessage(); if (e.key === 'Escape') cancelEdit(); }}
+        />
+        <button class="edit-save" on:click={handleEditMessage} disabled={!editingText.trim()}>Сохранить</button>
+        <button class="edit-cancel" on:click={cancelEdit}>Отмена</button>
+      </div>
+    {/if}
   {/if}
 
   {#if contextMenu.visible}
@@ -506,7 +589,7 @@
       <div class="context-menu-item disabled">Закрепить</div>
       <div class="context-menu-item disabled">Скопировать</div>
       {#if isOwnMessage}
-        <div class="context-menu-item disabled">Редактировать</div>
+        <div class="context-menu-item" on:click={() => { const msg = messages.find(m => m.id === contextMenu.messageId); if (msg) handleEditFromMenu(msg); }}>Редактировать</div>
         <div class="context-menu-item danger" on:click={handleDeleteFromMenu}>Удалить</div>
       {/if}
     </div>
@@ -627,26 +710,39 @@
     gap: 4px;
   }
 
-  .message-group.own {
+  .message {
+    align-self: flex-start;
+    background: #f5f5f5;
+    max-width: 55%;
+    padding: 10px 14px;
+    border-radius: 16px;
+    position: relative;
+    display: flex;
     align-items: flex-end;
+    gap: 8px;
   }
 
-  .message-group.own .message {
-    align-self: flex-end;
+  .message.own {
     background: #e3f2fd;
   }
 
-  .message-group:not(.own) .message {
-    align-self: flex-start;
-    background: #f5f5f5;
+  .message-content {
+    word-wrap: break-word;
+    font-size: 15px;
+    line-height: 1.4;
+    flex: 1;
   }
 
-  .message-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
-    padding: 0 4px;
+  .message .msg-time {
+    font-size: 10px;
+    color: #888;
+    white-space: nowrap;
+  }
+
+  .message .msg-time .edited {
+    font-style: italic;
+    color: #666;
+    margin-left: 2px;
   }
 
   .avatar {
@@ -675,39 +771,40 @@
     margin-left: auto;
   }
 
-  .message {
-    max-width: 55%;
-    padding: 10px 14px;
-    border-radius: 16px;
-    position: relative;
+  .message-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+    padding: 0 4px;
   }
 
-  .message.own {
-    background: #e3f2fd;
+  .message-header .sender-name {
+    font-weight: 600;
+    font-size: 14px;
   }
 
-  .system-message {
-    text-align: center;
-    padding: 8px 16px;
-    background: #f0f0f0;
-    border-radius: 8px;
+  .message-header .message-time {
+    font-size: 12px;
     color: #666;
-    font-size: 13px;
-    align-self: center;
-    width: 100%;
-    max-width: 100%;
-  }
-
-  .message-content {
-    word-wrap: break-word;
-    font-size: 15px;
-    line-height: 1.4;
+    cursor: pointer;
   }
 
   .message-meta {
     font-size: 11px;
     color: #888;
     margin-top: 4px;
+    display: flex;
+    gap: 4px;
+  }
+
+  .message-meta span {
+    cursor: default;
+  }
+
+  .message-meta .edited {
+    font-style: italic;
+    color: #666;
   }
 
   .delete {
@@ -966,5 +1063,79 @@
 
   .context-menu-item.danger:hover:not(.disabled) {
     background: #ffebee;
+  }
+
+  .edit-area {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid #e0e0e0;
+    background: #f5f5f5;
+  }
+
+  .edit-area input {
+    flex: 1;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 15px;
+  }
+
+  .edit-area input:focus {
+    outline: none;
+    border-color: #2196F3;
+  }
+
+  .edit-save {
+    padding: 10px 16px;
+    background: #4caf50;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .edit-save:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
+
+  .edit-cancel {
+    padding: 10px 16px;
+    background: #f5f5f5;
+    color: #666;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .edit-cancel:hover {
+    background: #e0e0e0;
+  }
+
+  .system-message {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: #f0f0f0;
+    border-radius: 8px;
+    color: #666;
+    font-size: 13px;
+    margin: 8px 0;
+  }
+
+  .system-message .system-content {
+    flex: 1;
+    text-align: center;
+  }
+
+  .system-message .system-time {
+    font-size: 10px;
+    color: #999;
+    white-space: nowrap;
   }
 </style>

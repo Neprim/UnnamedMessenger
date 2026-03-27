@@ -78,6 +78,7 @@ export interface ChatDetail {
 
 export interface Message {
   id: string;
+  chatId?: string;
   senderId: string | null;
   content: string;
   fileIds: string[];

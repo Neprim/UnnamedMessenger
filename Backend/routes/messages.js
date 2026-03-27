@@ -41,12 +41,14 @@ router.put('/:messageId', authenticate, (req, res) => {
       return res.status(400).json({ error: `Message exceeds ${config.limits.maxMessageLength} characters` });
     }
     
-    db.prepare('UPDATE messages SET content = ?, file_ids = ?, edited_at = datetime(\'now\') WHERE id = ?').run(content || null, fileIds ? JSON.stringify(fileIds) : null, req.params.messageId);
+    const editedAt = Math.floor(Date.now() / 1000);
+    db.prepare('UPDATE messages SET content = ?, file_ids = ?, edited_at = ? WHERE id = ?').run(content || null, fileIds ? JSON.stringify(fileIds) : null, editedAt, req.params.messageId);
     
     const updated = db.prepare('SELECT id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE id = ?').get(req.params.messageId);
     
     const response = {
       id: updated.id,
+      chatId: message.chat_id,
       senderId: updated.sender_id,
       content: updated.content,
       fileIds: updated.file_ids ? JSON.parse(updated.file_ids) : [],

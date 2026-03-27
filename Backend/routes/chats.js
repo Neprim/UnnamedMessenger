@@ -9,10 +9,11 @@ const router = express.Router();
 function createSystemMessage(chatId, eventType, data) {
   const messageId = uuidv4();
   const content = JSON.stringify({ event: eventType, ...data });
+  const timestamp = Math.floor(Date.now() / 1000);
   
   db.prepare(
-    'INSERT INTO messages (id, chat_id, sender_id, content) VALUES (?, ?, NULL, ?)'
-  ).run(messageId, chatId, content);
+    'INSERT INTO messages (id, chat_id, sender_id, content, timestamp) VALUES (?, ?, NULL, ?, ?)'
+  ).run(messageId, chatId, content, timestamp);
   
   const message = db.prepare(
     'SELECT id, chat_id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE id = ?'
