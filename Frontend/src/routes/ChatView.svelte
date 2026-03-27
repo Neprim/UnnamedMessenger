@@ -361,7 +361,7 @@
         if (container) container.scrollTop = container.scrollHeight;
       });
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load chat';
+      error = e instanceof Error ? e.message : 'Не удалось загрузить чат';
     } finally {
       loading = false;
     }
@@ -391,7 +391,7 @@
         if (container) container.scrollTop = container.scrollHeight;
       });
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to send message';
+      error = e instanceof Error ? e.message : 'Не удалось отправить сообщение';
     } finally {
       sending = false;
     }
@@ -402,7 +402,7 @@
       await api.messages.delete(messageId);
       messages = messages.filter(m => m.id !== messageId);
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to delete message';
+      error = e instanceof Error ? e.message : 'Не удалось удалить сообщение';
     }
   }
 
@@ -438,7 +438,7 @@
       userSearch = '';
       searchResults = [];
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to add member';
+      error = e instanceof Error ? e.message : 'Не удалось добавить участника';
     } finally {
       addingMember = false;
     }
@@ -450,27 +450,27 @@
       chatDetail = await api.chats.get(params.id);
       showMembersModal = false;
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to remove member';
+      error = e instanceof Error ? e.message : 'Не удалось удалить участника';
     }
   }
 
   async function handleLeaveChat() {
-    if (!confirm('Are you sure you want to leave this chat?')) return;
+    if (!confirm('Вы уверены, что хотите покинуть этот чат?')) return;
     try {
       await api.chats.leave(params.id);
       window.location.hash = '#/chats';
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to leave chat';
+      error = e instanceof Error ? e.message : 'Не удалось покинуть чат';
     }
   }
 
   async function handleDeleteChat() {
-    if (!confirm('Are you sure you want to delete this chat?')) return;
+    if (!confirm('Вы уверены, что хотите удалить этот чат?')) return;
     try {
       await api.chats.delete(params.id);
       window.location.hash = '#/chats';
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to delete chat';
+      error = e instanceof Error ? e.message : 'Не удалось удалить чат';
     }
   }
 </script>
@@ -481,23 +481,23 @@
       {#if chatDetail?.type === 'pm' && otherUserName}
         {otherUserName}
       {:else}
-        {chatDetail?.name || 'Chat'}
+        {chatDetail?.name || 'Чат'}
       {/if}
     </h2>
     {#if chatKey}
       <div class="header-actions">
-        <button class="icon-btn" on:click={() => showMembersModal = true} title="Members">👥</button>
+        <button class="icon-btn" on:click={() => showMembersModal = true} title="Участники">👥</button>
         {#if isCreator && chatDetail?.type === 'gm'}
-          <button class="icon-btn" on:click={() => showAddMemberModal = true} title="Add member">+</button>
+          <button class="icon-btn" on:click={() => showAddMemberModal = true} title="Добавить участника">+</button>
         {:else if chatDetail?.type === 'gm'}
-          <button class="icon-btn leave-btn" on:click={handleLeaveChat} title="Leave chat">🚪</button>
+          <button class="icon-btn leave-btn" on:click={handleLeaveChat} title="Покинуть чат">🚪</button>
         {/if}
       </div>
     {/if}
   </header>
 
   {#if loading}
-    <div class="loading">Loading...</div>
+    <div class="loading">Загрузка...</div>
   {:else if error}
     <div class="error">{error}</div>
   {:else}
@@ -527,11 +527,11 @@
                  <div class="message-content">
                    {msg.content}
                  </div>
-                 <span class="msg-time" title={new Date(msg.timestamp * 1000).toLocaleString()}>
-                   {new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                   {#if msg.editedAt}
-                     <span class="edited" title={new Date(msg.editedAt * 1000).toLocaleString()}>(edited)</span>
-                   {/if}
+                  <span class="msg-time" title={new Date(msg.timestamp * 1000).toLocaleString()}>
+                    {new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {#if msg.editedAt}
+                      <span class="edited" title={new Date(msg.editedAt * 1000).toLocaleString()}>(изменено)</span>
+                    {/if}
                  </span>
                </div>
              {/each}
@@ -544,11 +544,11 @@
       <input 
         type="text" 
         bind:value={newMessage} 
-        placeholder="Type a message..." 
+        placeholder="Введите сообщение..." 
         disabled={sending || !chatKey}
       />
       <button type="submit" disabled={sending || !newMessage.trim() || !chatKey}>
-        {sending ? '...' : 'Send'}
+        {sending ? '...' : 'Отправить'}
       </button>
     </form>
 
@@ -583,19 +583,19 @@
 {#if showAddMemberModal}
   <div class="modal-overlay" on:click={() => showAddMemberModal = false}>
     <div class="modal" on:click|stopPropagation>
-      <h3>Add Member</h3>
+      <h3>Добавить участника</h3>
       <div class="field">
-        <label for="userSearch">Search users</label>
+        <label for="userSearch">Поиск пользователей</label>
         <input 
           type="text" 
           id="userSearch" 
           bind:value={userSearch} 
           on:input={searchUsers}
-          placeholder="Enter username..."
+          placeholder="Введите имя пользователя..."
         />
       </div>
       {#if searching}
-        <p>Searching...</p>
+        <p>Поиск...</p>
       {:else if searchResults.length > 0}
         <div class="search-results">
           {#each searchResults as user}
@@ -612,7 +612,7 @@
         </div>
       {/if}
       <div class="modal-actions">
-        <button on:click={() => showAddMemberModal = false}>Cancel</button>
+        <button on:click={() => showAddMemberModal = false}>Отмена</button>
       </div>
     </div>
   </div>
@@ -621,24 +621,24 @@
 {#if showMembersModal}
   <div class="modal-overlay" on:click={() => showMembersModal = false}>
     <div class="modal" on:click|stopPropagation>
-      <h3>Members</h3>
+      <h3>Участники</h3>
       <div class="members-list">
         {#each chatDetail?.members || [] as member}
           <div class="member-item">
             <span class="member-name">{member.username}</span>
             {#if isCreator && chatDetail?.type === 'gm' && member.id !== $auth.user?.id}
-              <button class="remove-btn" on:click={() => removeMember(member.id)}>Remove</button>
+              <button class="remove-btn" on:click={() => removeMember(member.id)}>Удалить</button>
             {/if}
           </div>
         {/each}
       </div>
       <div class="modal-actions">
         {#if chatDetail?.type === 'pm'}
-          <button class="delete-chat-btn" on:click={handleDeleteChat}>Delete Chat</button>
+          <button class="delete-chat-btn" on:click={handleDeleteChat}>Удалить чат</button>
         {:else if isCreator && (chatDetail?.members?.length || 0) === 1}
-          <button class="delete-chat-btn" on:click={handleDeleteChat}>Delete Chat</button>
+          <button class="delete-chat-btn" on:click={handleDeleteChat}>Удалить чат</button>
         {/if}
-        <button on:click={() => showMembersModal = false}>Close</button>
+        <button on:click={() => showMembersModal = false}>Закрыть</button>
       </div>
     </div>
   </div>

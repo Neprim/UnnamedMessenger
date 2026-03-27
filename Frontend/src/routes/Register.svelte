@@ -11,7 +11,7 @@
 
   async function handleRegister() {
     if (!username || !password) {
-      error = 'Please fill all fields';
+      error = 'Заполните все поля';
       return;
     }
 
@@ -50,7 +50,7 @@
 
       push('/chats');
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Registration failed';
+      error = e instanceof Error ? e.message : 'Ошибка регистрации';
     } finally {
       loading = false;
     }
@@ -61,21 +61,21 @@
   <h1>Register</h1>
   <form on:submit|preventDefault={handleRegister}>
     <div class="field">
-      <label for="username">Username</label>
+      <label for="username">Имя пользователя</label>
       <input type="text" id="username" bind:value={username} disabled={loading} />
     </div>
     <div class="field">
-      <label for="password">Password</label>
+      <label for="password">Пароль</label>
       <input type="password" id="password" bind:value={password} disabled={loading} />
     </div>
     {#if error}
       <p class="error">{error}</p>
     {/if}
     <button type="submit" disabled={loading}>
-      {loading ? 'Registering...' : 'Register'}
+      {loading ? 'Регистрация...' : 'Зарегистрироваться'}
     </button>
   </form>
-  <p class="link">Already have an account? <a href="#/login">Login</a></p>
+  <p class="link">Уже есть аккаунт? <a href="#/login">Войти</a></p>
 </div>
 
 <style>

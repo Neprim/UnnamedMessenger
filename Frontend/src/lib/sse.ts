@@ -10,9 +10,9 @@ export const sseEvents = writable<SSEEvent | null>(null);
 
 export const sseMessage = writable<{ chatId: string; message: Message } | null>(null);
 
-export const memberEvents = writable<{ type: string; chatId: string; userId: string; memberCount: number; removed?: boolean }[]>([]);
+export const memberEvent = writable<{ type: string; chatId: string; userId: string; memberCount: number; removed?: boolean } | null>(null);
 
-export const chatDeletedEvents = writable<string[]>([]);
+export const chatDeletedEvent = writable<string | null>(null);
 
 let eventSource: EventSource | null = null;
 
@@ -21,11 +21,8 @@ export function connectSSE() {
 
   const token = sessionStorage.getItem('token');
   if (!token) {
-    console.log('No token, skipping SSE connection');
     return;
   }
-
-  console.log('Connecting to SSE with token:', token.substring(0, 20) + '...');
   
   eventSource = new EventSource(`/api/events?token=${token}`);
 
@@ -34,7 +31,6 @@ export function connectSSE() {
   };
 
   eventSource.onmessage = (event) => {
-    console.log('SSE message received:', event.data);
     try {
       const data = JSON.parse(event.data);
       sseEvents.set(data);
@@ -81,19 +77,18 @@ function handleSSEEvent(event: SSEEvent) {
     case 'member_removed':
     case 'member_left': {
       const data = event.data;
-      console.log('SSE member event received:', event.type, data);
-      sseMessage.set({ chatId: data.message.chatId, message: data.message });
-      memberEvents.update(events => [...events, { 
+      memberEvent.set({ 
         type: event.type, 
         chatId: data.chatId, 
         userId: data.userId,
         memberCount: data.memberCount,
         removed: data.removed
-      }]);
+      });
+      sseMessage.set({ chatId: data.message.chatId, message: data.message });
       break;
     }
     case 'chat_deleted': {
-      chatDeletedEvents.update(events => [...events, event.data.chatId]);
+      chatDeletedEvent.set(event.data.chatId);
       break;
     }
   }

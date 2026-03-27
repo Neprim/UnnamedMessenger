@@ -14,24 +14,6 @@ export interface AuthState {
   privateKey: CryptoKey | null;
 }
 
-async function loadPrivateKeyFromStorage(): Promise<CryptoKey | null> {
-  const privateKeyBase64 = localStorage.getItem('privateKey');
-  if (!privateKeyBase64) return null;
-
-  try {
-    const keyBytes = Uint8Array.from(atob(privateKeyBase64), c => c.charCodeAt(0));
-    return window.crypto.subtle.importKey(
-      'pkcs8',
-      keyBytes,
-      { name: 'RSA-OAEP', hash: 'SHA-256' },
-      true,
-      ['decrypt']
-    );
-  } catch {
-    return null;
-  }
-}
-
 async function loadPrivateKeyFromSessionStorage(): Promise<CryptoKey | null> {
   const privateKeyBase64 = sessionStorage.getItem('privateKey');
   if (!privateKeyBase64) return null;

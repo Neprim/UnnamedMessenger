@@ -26,12 +26,12 @@
             const chatKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
             chatsStore.setChatKey(chat.id, chatKey);
           } catch (e) {
-            console.error('Failed to decrypt chat key:', e);
+            console.error('Не удалось расшифровать ключ чата:', e);
           }
         }
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load chats';
+      error = e instanceof Error ? e.message : 'Не удалось загрузить чаты';
     } finally {
       loading = false;
     }
@@ -66,7 +66,7 @@
       showCreateModal = false;
       newChatName = '';
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to create chat';
+      error = e instanceof Error ? e.message : 'Не удалось создать чат';
     } finally {
       creatingChat = false;
     }
@@ -81,12 +81,12 @@
 
 <div class="container">
   <header>
-    <h1>Chats</h1>
-    <button class="logout" on:click={handleLogout}>Logout</button>
+    <h1>Чаты</h1>
+    <button class="logout" on:click={handleLogout}>Выход</button>
   </header>
 
   {#if loading}
-    <p class="loading">Loading...</p>
+    <p class="loading">Загрузка...</p>
   {:else if error}
     <p class="error">{error}</p>
   {:else}
@@ -95,15 +95,15 @@
         <a href="#/chat/{chat.id}" class="chat-item">
           <div class="chat-icon">{chat.type === 'gm' ? 'G' : 'P'}</div>
           <div class="chat-info">
-            <div class="chat-name">{chat.name || 'Personal Chat'}</div>
-            <div class="chat-meta">{chat.memberCount} members</div>
+            <div class="chat-name">{chat.name || 'Личный чат'}</div>
+            <div class="chat-meta">{chat.memberCount} участников</div>
           </div>
         </a>
       {/each}
     </div>
 
     <button class="create-btn" on:click={() => showCreateModal = true}>
-      + New Chat
+      + Новый чат
     </button>
   {/if}
 </div>
@@ -111,17 +111,17 @@
 {#if showCreateModal}
   <div class="modal-overlay" on:click={() => showCreateModal = false}>
     <div class="modal" on:click|stopPropagation>
-      <h2>Create Chat</h2>
+      <h2>Создать чат</h2>
       <div class="field">
-        <label for="chatType">Type</label>
+        <label for="chatType">Тип</label>
         <select id="chatType" bind:value={newChatType}>
-          <option value="gm">Group</option>
-          <option value="pm">Personal</option>
+          <option value="gm">Групповой</option>
+          <option value="pm">Личный</option>
         </select>
       </div>
       {#if newChatType === 'gm'}
         <div class="field">
-          <label for="chatName">Name</label>
+          <label for="chatName">Название</label>
           <input type="text" id="chatName" bind:value={newChatName} />
         </div>
       {/if}
@@ -129,9 +129,9 @@
         <p class="error">{error}</p>
       {/if}
       <div class="modal-actions">
-        <button on:click={() => showCreateModal = false}>Cancel</button>
+        <button on:click={() => showCreateModal = false}>Отмена</button>
         <button class="primary" on:click={handleCreateChat} disabled={creatingChat}>
-          {creatingChat ? 'Creating...' : 'Create'}
+          {creatingChat ? 'Создание...' : 'Создать'}
         </button>
       </div>
     </div>

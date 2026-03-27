@@ -3,11 +3,10 @@
   import { push } from 'svelte-spa-router';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
-  import { memberEvents, chatDeletedEvents } from '../lib/sse';
+  import { memberEvent, chatDeletedEvent } from '../lib/sse';
   import * as crypto from '../lib/crypto';
   import ChatView from './ChatView.svelte';
 
-  let chatList: Chat[] = [];
   let loading = true;
   let showCreateModal = false;
   let showSettingsModal = false;
@@ -35,12 +34,9 @@
 
   $: selectedChatId = params.id || null;
 
-  const unsubscribeChats = chats.subscribe(data => {
-    chatList = data;
-  });
-
   onDestroy(() => {
-    unsubscribeChats();
+    if (unsubscribeMemberEvent) unsubscribeMemberEvent();
+    if (unsubscribeChatDeleted) unsubscribeChatDeleted();
   });
 
   async function searchUsers() {
@@ -60,10 +56,10 @@
   }
 
   function isUserInPersonalChat(userId: string): boolean {
-    return chatList.some(c => c.type === 'pm' && c.members?.includes(userId));
+    return $chats.some(c => c.type === 'pm' && c.members?.includes(userId));
   }
 
-  let unsubscribeMemberEvents: () => void;
+  let unsubscribeMemberEvent: () => void;
   let unsubscribeChatDeleted: () => void;
 
   onMount(async () => {
@@ -79,41 +75,35 @@
       loadChats();
     }, 5000);
 
-    unsubscribeMemberEvents = memberEvents.subscribe(events => {
-      for (const event of events) {
+    unsubscribeMemberEvent = memberEvent.subscribe(event => {
+      if (event) {
         handleMemberEvent(event);
-      }
-      if (events.length > 0) {
-        memberEvents.set([]);
+        memberEvent.set(null);
       }
     });
 
-    const unsubscribeChatDeleted = chatDeletedEvents.subscribe(chatIds => {
-      for (const chatId of chatIds) {
-        const exists = chatList.find(c => c.id === chatId);
+    unsubscribeChatDeleted = chatDeletedEvent.subscribe(chatId => {
+      if (chatId) {
+        const exists = $chats.find(c => c.id === chatId);
         if (exists) {
-          chatList = chatList.filter(c => c.id !== chatId);
           chats.removeChat(chatId);
           if (selectedChatId === chatId) {
             push('/chats');
           }
         }
-      }
-      if (chatIds.length > 0) {
-        chatDeletedEvents.set([]);
+        chatDeletedEvent.set(null);
       }
     });
   });
 
   onDestroy(() => {
-    if (unsubscribeMemberEvents) unsubscribeMemberEvents();
+    if (unsubscribeMemberEvent) unsubscribeMemberEvent();
     if (unsubscribeChatDeleted) unsubscribeChatDeleted();
-    unsubscribeChats();
   });
 
-  async function handleMemberEvent(event: { type: string; chatId: string; userId: string; memberCount: number; removed?: boolean }) {
+  async function handleMemberEvent(event: { type: string; chatId: string; userId: string; memberCount: number; removed?: boolean; username?: string }) {
     if (event.type === 'member_added') {
-      const exists = chatList.find(c => c.id === event.chatId);
+      const exists = $chats.find(c => c.id === event.chatId);
       if (!exists && $auth.user?.id === event.userId) {
         const chatDetail = await api.chats.get(event.chatId);
         const currentMember = chatDetail.members.find((m: any) => m.id === $auth.user?.id);
@@ -134,7 +124,7 @@
             chatKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
             chats.setChatKey(event.chatId, chatKey);
           } catch (e) {
-            console.error('Failed to decrypt chat key:', e);
+            console.error('Не удалось расшифровать ключ чата:', e);
           }
         }
         
@@ -175,19 +165,10 @@
               }
             }
           } catch (e) {
-            console.error('Failed to load last messages:', e);
+            console.error('Не удалось загрузить последние сообщения:', e);
           }
         }
         
-        chatList = [...chatList, { 
-          id: chatDetail.id, 
-          type: chatDetail.type, 
-          name: chatDetail.name, 
-          memberCount: event.memberCount,
-          members: chatDetail.members.map((m: any) => m.id),
-          otherUser,
-          lastMessage
-        }];
         chats.addChat({
           id: chatDetail.id, 
           type: chatDetail.type, 
@@ -198,7 +179,6 @@
           lastMessage
         });
       } else if (exists) {
-        chatList = chatList.map(c => c.id === event.chatId ? { ...c, memberCount: event.memberCount } : c);
         chats.updateChat(event.chatId, { memberCount: event.memberCount });
       }
     } else if (event.type === 'member_removed' || event.type === 'member_left') {
@@ -206,21 +186,11 @@
       const systemContent = event.type === 'member_removed' ? `${removedUser} удалён из чата` : `${removedUser} покинул чат`;
       
       if ($auth.user?.id === event.userId || event.removed) {
-        chatList = chatList.filter(c => c.id !== event.chatId);
         chats.removeChat(event.chatId);
         if (selectedChatId === event.chatId) {
           push('/chats');
         }
       } else {
-        chatList = chatList.map(c => c.id === event.chatId ? { 
-          ...c, 
-          memberCount: event.memberCount,
-          lastMessage: {
-            senderId: null,
-            content: systemContent,
-            isSystem: true
-          }
-        } : c);
         chats.updateChat(event.chatId, { 
           memberCount: event.memberCount,
           lastMessage: {
@@ -249,7 +219,7 @@
             chatKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
             chats.setChatKey(chat.id, chatKey);
           } catch (e) {
-            console.error('Failed to decrypt chat key:', e);
+            console.error('Не удалось расшифровать ключ чата:', e);
           }
         }
         
@@ -298,26 +268,25 @@
                 }
               }
             }
-          } catch (e) {
-            console.error('Failed to load last messages:', e);
+            } catch (e) {
+            console.error('Не удалось загрузить последние сообщения:', e);
           }
         }
         
-        loadedChats.push({
-          id: chat.id,
-          type: chat.type,
-          name: chat.name,
-          memberCount: chat.memberCount,
-          members: chatDetail.members.map((m: any) => m.id),
-          otherUser,
-          lastMessage
-        });
-      }
-      
-      chatList = loadedChats;
-      chats.set(loadedChats);
-    } catch (e) {
-      console.error('Failed to load chats:', e);
+      loadedChats.push({
+        id: chat.id,
+        type: chat.type,
+        name: chat.name,
+        memberCount: chat.memberCount,
+        members: chatDetail.members.map((m: any) => m.id),
+        otherUser,
+        lastMessage
+      });
+    }
+    
+    chats.set(loadedChats);
+  } catch (e) {
+      console.error('Не удалось загрузить чаты:', e);
     } finally {
       loading = false;
     }
@@ -360,15 +329,6 @@
         chats.setChatKey(result.id, decryptedKey);
       }
 
-      chatList = [...chatList, { 
-        id: result.id, 
-        type: newChatType, 
-        name: newChatName || null, 
-        memberCount: newChatType === 'pm' ? 2 : 1,
-        members: [$auth.user?.id!, ...members],
-        otherUser: newChatType === 'pm' ? { id: selectedUserId!, username: searchResults.find(u => u.id === selectedUserId)?.username || 'User' } : null,
-        lastMessage: null
-      }];
       chats.addChat({
         id: result.id, 
         type: newChatType, 
@@ -384,7 +344,7 @@
       selectedUserId = null;
       push(`/chats/${result.id}`);
     } catch (e) {
-      console.error('Failed to create chat:', e);
+      console.error('Не удалось создать чат:', e);
     } finally {
       creatingChat = false;
     }
@@ -405,7 +365,7 @@
       showUsernameModal = false;
       newUsername = '';
     } catch (e) {
-      console.error('Failed to update username:', e);
+      console.error('Не удалось обновить имя пользователя:', e);
     } finally {
       updatingUsername = false;
     }
@@ -431,7 +391,7 @@
       showExportKeyModal = false;
       exportConfirmChecked = false;
     } catch (e) {
-      console.error('Failed to export private key:', e);
+      console.error('Не удалось экспортировать закрытый ключ:', e);
     } finally {
       exportingKey = false;
     }
@@ -461,7 +421,7 @@
       newPasswordConfirm = '';
       alert('Пароль изменён. На других устройствах потребуется повторный вход с новым паролем.');
     } catch (e) {
-      console.error('Failed to change password:', e);
+      console.error('Не удалось изменить пароль:', e);
       alert('Не удалось изменить пароль');
     } finally {
       changingPassword = false;
@@ -473,22 +433,22 @@
   <aside class="sidebar">
     <header>
       <div class="header-left">
-        <button class="icon-btn" on:click={() => showSettingsModal = true} title="Settings">⚙️</button>
-        <h2>Chats</h2>
+        <button class="icon-btn" on:click={() => showSettingsModal = true} title="Настройки">⚙️</button>
+        <h2>Чаты</h2>
       </div>
       <div class="header-actions">
-        <button class="icon-btn" on:click={() => showCreateModal = true} title="New Chat">+</button>
-        <button class="icon-btn logout" on:click={handleLogout} title="Logout">↪</button>
+        <button class="icon-btn" on:click={() => showCreateModal = true} title="Новый чат">+</button>
+        <button class="icon-btn logout" on:click={handleLogout} title="Выход">↪</button>
       </div>
     </header>
 
     <div class="chat-list">
       {#if loading}
-        <div class="loading">Loading...</div>
-      {:else if chatList.length === 0}
-        <div class="empty">No chats yet</div>
+        <div class="loading">Загрузка...</div>
+      {:else if $chats.length === 0}
+        <div class="empty">Пока нет чатов</div>
       {:else}
-        {#each chatList as chat}
+        {#each $chats as chat}
           <a 
             href="#/chats/{chat.id}" 
             class="chat-item"
@@ -496,7 +456,7 @@
           >
             <div class="chat-icon">{chat.type === 'gm' ? 'G' : 'P'}</div>
             <div class="chat-info">
-              <div class="chat-name">{chat.type === 'pm' ? (chat.otherUser?.username || 'Personal Chat') : (chat.name || 'Group Chat')}</div>
+              <div class="chat-name">{chat.type === 'pm' ? (chat.otherUser?.username || 'Личный чат') : (chat.name || 'Групповой чат')}</div>
               <div class="chat-meta">
                 {#if chat.lastMessage}
                   {#if chat.lastMessage.isSystem}
@@ -505,7 +465,7 @@
                     <span class="last-message">{chat.lastMessage.senderUsername}: {chat.lastMessage.content}</span>
                   {/if}
                 {:else}
-                  {chat.memberCount} members
+                  {chat.memberCount} участников
                 {/if}
               </div>
             </div>
@@ -520,7 +480,7 @@
       <ChatView params={{ id: selectedChatId }} />
     {:else}
       <div class="no-chat">
-        <p>Select a chat to start messaging</p>
+        <p>Выберите чат, чтобы начать общение</p>
       </div>
     {/if}
   </main>
@@ -529,37 +489,37 @@
 {#if showCreateModal}
   <div class="modal-overlay" on:click={() => showCreateModal = false}>
     <div class="modal" on:click|stopPropagation>
-      <h3>Create Chat</h3>
+      <h3>Создать чат</h3>
       <div class="field">
-        <label for="chatType">Type</label>
+        <label for="chatType">Тип</label>
         <select id="chatType" bind:value={newChatType}>
-          <option value="gm">Group</option>
-          <option value="pm">Personal</option>
+          <option value="gm">Групповой</option>
+          <option value="pm">Личный</option>
         </select>
       </div>
       {#if newChatType === 'gm'}
         <div class="field">
-          <label for="chatName">Name</label>
-          <input type="text" id="chatName" bind:value={newChatName} placeholder="Group name" />
+          <label for="chatName">Название</label>
+          <input type="text" id="chatName" bind:value={newChatName} placeholder="Название группы" />
         </div>
       {/if}
       {#if newChatType === 'pm'}
         <div class="field">
-          <label for="userSearch">Select User</label>
+          <label for="userSearch">Выберите пользователя</label>
           <input 
             type="text" 
             id="userSearch" 
             bind:value={userSearch} 
             on:input={searchUsers}
-            placeholder="Search users..."
+            placeholder="Поиск пользователей..."
           />
         </div>
         {#if searching}
-          <p>Searching...</p>
+          <p>Поиск...</p>
         {:else if searchResults.length > 0}
           <div class="search-results">
             {#each searchResults as user}
-              {@const hasExistingChat = chatList.some(c => c.type === 'pm' && c.members?.includes(user.id))}
+              {@const hasExistingChat = $chats.some(c => c.type === 'pm' && c.members?.includes(user.id))}
               {@const isSelected = selectedUserId === user.id}
               <div 
                 class="search-result"
@@ -568,20 +528,20 @@
                 on:click={() => !hasExistingChat && (selectedUserId = user.id)}
               >
                 {user.username}
-                {hasExistingChat ? '(already chat exists)' : isSelected ? '(selected)' : ''}
+                {hasExistingChat ? '(чат уже существует)' : isSelected ? '(выбрано)' : ''}
               </div>
             {/each}
           </div>
         {/if}
       {/if}
       <div class="modal-actions">
-        <button on:click={() => { showCreateModal = false; userSearch = ''; selectedUserId = null; }}>Cancel</button>
+        <button on:click={() => { showCreateModal = false; userSearch = ''; selectedUserId = null; }}>Отмена</button>
         <button 
           class="primary" 
           on:click={handleCreateChat} 
           disabled={creatingChat || (newChatType === 'pm' && !selectedUserId)}
         >
-          {creatingChat ? 'Creating...' : 'Create'}
+          {creatingChat ? 'Создание...' : 'Создать'}
         </button>
       </div>
     </div>

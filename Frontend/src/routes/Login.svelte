@@ -16,7 +16,7 @@
 
   async function handleLogin() {
     if (!username || !password) {
-      error = 'Please fill all fields';
+      error = 'Заполните все поля';
       return;
     }
 
@@ -33,7 +33,7 @@
 
       const encryptedPrivateKey = localStorage.getItem('encryptedPrivateKey');
       if (!encryptedPrivateKey) {
-        error = 'No saved keys found. Please register first.';
+        error = 'Сохранённые ключи не найдены. Сначала зарегистрируйтесь.';
         loading = false;
         return;
       }
@@ -59,7 +59,7 @@
         loading = false;
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Login failed';
+      error = e instanceof Error ? e.message : 'Ошибка входа';
     } finally {
       loading = false;
     }
@@ -79,7 +79,7 @@
       hasEncryptedKey = true;
       keyUploadSuccess = true;
     } catch (e) {
-      keyUploadError = 'Failed to load key file';
+      keyUploadError = 'Не удалось загрузить файл ключа';
     }
   }
 </script>
@@ -117,21 +117,21 @@
   {/if}
   <form on:submit|preventDefault={handleLogin}>
     <div class="field">
-      <label for="username">Username</label>
+      <label for="username">Имя пользователя</label>
       <input type="text" id="username" bind:value={username} disabled={loading} />
     </div>
     <div class="field">
-      <label for="password">Password</label>
+      <label for="password">Пароль</label>
       <input type="password" id="password" bind:value={password} disabled={loading} />
     </div>
     {#if error}
       <p class="error">{error}</p>
     {/if}
     <button type="submit" disabled={loading}>
-      {loading ? 'Logging in...' : 'Login'}
+      {loading ? 'Вход...' : 'Войти'}
     </button>
   </form>
-  <p class="link">Don't have an account? <a href="#/register">Register</a></p>
+  <p class="link">Нет аккаунта? <a href="#/register">Регистрация</a></p>
 </div>
 
 <style>
