@@ -32,6 +32,24 @@ async function loadPrivateKeyFromStorage(): Promise<CryptoKey | null> {
   }
 }
 
+async function loadPrivateKeyFromSessionStorage(): Promise<CryptoKey | null> {
+  const privateKeyBase64 = sessionStorage.getItem('privateKey');
+  if (!privateKeyBase64) return null;
+
+  try {
+    const keyBytes = Uint8Array.from(atob(privateKeyBase64), c => c.charCodeAt(0));
+    return window.crypto.subtle.importKey(
+      'pkcs8',
+      keyBytes,
+      { name: 'RSA-OAEP', hash: 'SHA-256' },
+      true,
+      ['decrypt']
+    );
+  } catch {
+    return null;
+  }
+}
+
 function createAuthStore() {
   const { subscribe, set, update } = writable<AuthState>({
     isAuthenticated: false,
@@ -43,32 +61,33 @@ function createAuthStore() {
   return {
     subscribe,
     setUser: (user: User, privateKey: CryptoKey) => {
-      localStorage.setItem('username', user.username);
-      localStorage.setItem('publicKey', user.publicKey);
+      sessionStorage.setItem('username', user.username);
+      sessionStorage.setItem('publicKey', user.publicKey);
       update(state => ({ ...state, isAuthenticated: true, user, privateKey }));
     },
     setPrivateKey: (privateKey: CryptoKey) => {
       update(state => ({ ...state, privateKey }));
     },
     updateUser: (updates: Partial<User>) => {
-      localStorage.setItem('username', updates.username || '');
+      sessionStorage.setItem('username', updates.username || '');
       update(state => ({
         ...state,
         user: state.user ? { ...state.user, ...updates } : null
       }));
     },
     logout: () => {
-      localStorage.removeItem('username');
-      localStorage.removeItem('privateKey');
       localStorage.removeItem('token');
+      sessionStorage.removeItem('username');
+      sessionStorage.removeItem('publicKey');
+      sessionStorage.removeItem('privateKey');
       setToken(null);
       set({ isAuthenticated: false, user: null, privateKey: null });
     },
     loadFromStorage: async () => {
-      const username = localStorage.getItem('username');
-      const publicKey = localStorage.getItem('publicKey');
-      const token = localStorage.getItem('token');
-      const privateKey = await loadPrivateKeyFromStorage();
+      const username = sessionStorage.getItem('username');
+      const publicKey = sessionStorage.getItem('publicKey');
+      const token = sessionStorage.getItem('token');
+      const privateKey = await loadPrivateKeyFromSessionStorage();
       
       if (token) {
         setToken(token);

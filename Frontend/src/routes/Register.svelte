@@ -29,7 +29,7 @@
       });
 
       setToken(token);
-      localStorage.setItem('token', token);
+      sessionStorage.setItem('token', token);
 
       const saltBytes = Uint8Array.from(atob(salt), c => c.charCodeAt(0));
       const encoder = new TextEncoder();
@@ -39,7 +39,9 @@
 
       const exportedPrivateKey = await window.crypto.subtle.exportKey('pkcs8', privateKey);
       const privateKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(exportedPrivateKey)));
-      localStorage.setItem('privateKey', privateKeyBase64);
+      sessionStorage.setItem('privateKey', privateKeyBase64);
+      sessionStorage.setItem('username', username);
+      sessionStorage.setItem('publicKey', publicKeyExport);
       
       auth.setUser(
         { id: '', username, publicKey: publicKeyExport },

@@ -9,6 +9,8 @@
   let loading = false;
   let error = '';
   let keyFile: File | null = null;
+  let keyUploadError = '';
+  let keyUploadSuccess = false;
 
   $: hasEncryptedKey = localStorage.getItem('encryptedPrivateKey') !== null;
 
@@ -25,9 +27,9 @@
       const { salt, id, token, publicKey } = await api.auth.login({ username, password });
       
       setToken(token);
-      localStorage.setItem('token', token);
-      localStorage.setItem('username', username);
-      localStorage.setItem('publicKey', publicKey);
+      sessionStorage.setItem('token', token);
+      sessionStorage.setItem('username', username);
+      sessionStorage.setItem('publicKey', publicKey);
 
       const encryptedPrivateKey = localStorage.getItem('encryptedPrivateKey');
       if (!encryptedPrivateKey) {
@@ -36,21 +38,26 @@
         return;
       }
 
-      const saltBytes = Uint8Array.from(atob(salt), c => c.charCodeAt(0));
-      const privateKey = await crypto.decryptPrivateKey(encryptedPrivateKey, password, saltBytes);
+      try {
+        const saltBytes = Uint8Array.from(atob(salt), c => c.charCodeAt(0));
+        const privateKey = await crypto.decryptPrivateKey(encryptedPrivateKey, password, saltBytes);
 
-      const publicKeyObj = await crypto.importPublicKey(publicKey);
+        const publicKeyObj = await crypto.importPublicKey(publicKey);
 
-      const exportedPrivateKey = await window.crypto.subtle.exportKey('pkcs8', privateKey);
-      const privateKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(exportedPrivateKey)));
-      localStorage.setItem('privateKey', privateKeyBase64);
+        const exportedPrivateKey = await window.crypto.subtle.exportKey('pkcs8', privateKey);
+        const privateKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(exportedPrivateKey)));
+        sessionStorage.setItem('privateKey', privateKeyBase64);
 
-      auth.setUser(
-        { id, username, publicKey },
-        privateKey
-      );
+        auth.setUser(
+          { id, username, publicKey },
+          privateKey
+        );
 
-      push('/chats');
+        push('/chats');
+      } catch (decryptError) {
+        error = 'Не удалось расшифровать сохранённый ключ. Загрузите новый ключ.';
+        loading = false;
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Login failed';
     } finally {
@@ -63,12 +70,16 @@
     const file = target.files?.[0];
     if (!file) return;
 
+    keyUploadError = '';
+    keyUploadSuccess = false;
+
     try {
       const content = await file.text();
       localStorage.setItem('encryptedPrivateKey', content);
       hasEncryptedKey = true;
+      keyUploadSuccess = true;
     } catch (e) {
-      error = 'Failed to load key file';
+      keyUploadError = 'Failed to load key file';
     }
   }
 </script>
@@ -83,6 +94,26 @@
       <label for="keyFile">Загрузить ключ</label>
       <input type="file" id="keyFile" accept=".key" on:change={handleKeyUpload} />
     </div>
+    {#if keyUploadError}
+      <p class="error">{keyUploadError}</p>
+    {/if}
+    {#if keyUploadSuccess}
+      <p class="success">Ключ загружен</p>
+    {/if}
+  {:else}
+    <details class="key-upload-details">
+      <summary>Загрузить новый ключ</summary>
+      <div class="field">
+        <label for="keyFileNew">Выбрать файл</label>
+        <input type="file" id="keyFileNew" accept=".key" on:change={handleKeyUpload} />
+      </div>
+      {#if keyUploadError}
+        <p class="error">{keyUploadError}</p>
+      {/if}
+      {#if keyUploadSuccess}
+        <p class="success">Ключ загружен</p>
+      {/if}
+    </details>
   {/if}
   <form on:submit|preventDefault={handleLogin}>
     <div class="field">
@@ -175,5 +206,21 @@
     color: #856404;
     margin-bottom: 20px;
     text-align: center;
+  }
+  .success {
+    color: #4caf50;
+    margin-bottom: 15px;
+    text-align: center;
+  }
+  .key-upload-details {
+    margin-bottom: 20px;
+    padding: 10px;
+    background: #f5f5f5;
+    border-radius: 8px;
+  }
+  .key-upload-details summary {
+    cursor: pointer;
+    color: #666;
+    font-size: 14px;
   }
 </style>

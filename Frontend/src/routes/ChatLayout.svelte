@@ -13,10 +13,14 @@
   let showSettingsModal = false;
   let showUsernameModal = false;
   let showExportKeyModal = false;
+  let showPasswordModal = false;
   let exportConfirmChecked = false;
   let exportingKey = false;
   let newUsername = '';
   let updatingUsername = false;
+  let newPassword = '';
+  let newPasswordConfirm = '';
+  let changingPassword = false;
   let newChatName = '';
   let newChatType: 'pm' | 'gm' = 'gm';
   let creatingChat = false;
@@ -432,6 +436,37 @@
       exportingKey = false;
     }
   }
+
+  async function handleChangePassword() {
+    if (!newPassword || newPassword !== newPasswordConfirm || changingPassword) return;
+    changingPassword = true;
+    try {
+      const { salt } = await api.auth.changePassword(newPassword);
+      
+      const oldEncryptedKey = localStorage.getItem('encryptedPrivateKey');
+      if (oldEncryptedKey && $auth.privateKey) {
+        const derivedKey = await crypto.deriveKey(newPassword, Uint8Array.from(atob(salt), c => c.charCodeAt(0)));
+        const exportedKey = await window.crypto.subtle.exportKey('pkcs8', $auth.privateKey);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, derivedKey, exportedKey);
+        const combined = new Uint8Array(iv.length + encrypted.byteLength);
+        combined.set(iv);
+        combined.set(new Uint8Array(encrypted), iv.length);
+        const newEncryptedKey = btoa(String.fromCharCode(...combined));
+        localStorage.setItem('encryptedPrivateKey', newEncryptedKey);
+      }
+      
+      showPasswordModal = false;
+      newPassword = '';
+      newPasswordConfirm = '';
+      alert('Пароль изменён. На других устройствах потребуется повторный вход с новым паролем.');
+    } catch (e) {
+      console.error('Failed to change password:', e);
+      alert('Не удалось изменить пароль');
+    } finally {
+      changingPassword = false;
+    }
+  }
 </script>
 
 <div class="layout">
@@ -560,7 +595,7 @@
       <div class="settings-list">
         <button class="settings-btn" on:click={() => { showUsernameModal = true; showSettingsModal = false; }}>Изменить имя пользователя</button>
         <button class="settings-btn" disabled>Изменить аватар</button>
-        <button class="settings-btn" disabled>Изменить пароль</button>
+        <button class="settings-btn" on:click={() => { showPasswordModal = true; showSettingsModal = false; }}>Изменить пароль</button>
         <button class="settings-btn" on:click={() => { showExportKeyModal = true; showSettingsModal = false; }}>Экспорт приватного ключа</button>
         <button class="settings-btn danger" disabled>Удалить аккаунт</button>
       </div>
@@ -618,6 +653,48 @@
           disabled={exportingKey || !exportConfirmChecked}
         >
           {exportingKey ? 'Экспорт...' : 'Скачать'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showPasswordModal}
+  <div class="modal-overlay" on:click={() => showPasswordModal = false}>
+    <div class="modal" on:click|stopPropagation>
+      <h3>Изменить пароль</h3>
+      <div class="warning-box">
+        ⚠️ Внимание: после смены пароля приватный ключ на других устройствах перестанет работать. Вам нужно будет загрузить новый зашифрованный ключ на других устройствах.
+      </div>
+      <div class="field">
+        <label for="newPassword">Новый пароль</label>
+        <input 
+          type="password" 
+          id="newPassword" 
+          bind:value={newPassword} 
+          placeholder="Введите новый пароль..."
+        />
+      </div>
+      <div class="field">
+        <label for="newPasswordConfirm">Подтвердите пароль</label>
+        <input 
+          type="password" 
+          id="newPasswordConfirm" 
+          bind:value={newPasswordConfirm} 
+          placeholder="Повторите пароль..."
+        />
+      </div>
+      {#if newPassword && newPasswordConfirm && newPassword !== newPasswordConfirm}
+        <p class="error-text">Пароли не совпадают</p>
+      {/if}
+      <div class="modal-actions">
+        <button on:click={() => { showPasswordModal = false; newPassword = ''; newPasswordConfirm = ''; }}>Отмена</button>
+        <button 
+          class="primary" 
+          on:click={handleChangePassword}
+          disabled={changingPassword || !newPassword || newPassword !== newPasswordConfirm}
+        >
+          {changingPassword ? 'Смена...' : 'Изменить'}
         </button>
       </div>
     </div>
@@ -957,5 +1034,12 @@
   .checkbox-label input {
     width: 18px;
     height: 18px;
+  }
+
+  .error-text {
+    color: #f44336;
+    font-size: 14px;
+    margin-top: -10px;
+    margin-bottom: 10px;
   }
 </style>

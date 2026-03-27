@@ -94,7 +94,10 @@ export const api = {
       request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
     
     logout: () => 
-      request<{ message: string }>('/auth/logout', { method: 'POST' })
+      request<{ message: string }>('/auth/logout', { method: 'POST' }),
+    
+    changePassword: (newPassword: string) => 
+      request<{ salt: string }>('/auth/change-password', { method: 'POST', body: JSON.stringify({ newPassword }) })
   },
 
   users: {

@@ -20,7 +20,7 @@ let eventSource: EventSource | null = null;
 export function connectSSE() {
   if (eventSource) return;
 
-  const token = localStorage.getItem('token');
+  const token = sessionStorage.getItem('token');
   if (!token) {
     console.log('No token, skipping SSE connection');
     return;

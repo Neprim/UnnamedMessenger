@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 const db = require('../db');
 const config = require('../config');
+const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -82,6 +83,31 @@ router.post('/login', async (req, res) => {
 router.post('/logout', (req, res) => {
   res.clearCookie(config.cookie.name);
   res.json({ message: 'Logged out' });
+});
+
+router.post('/change-password', async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+    
+    if (!newPassword) {
+      return res.status(400).json({ error: 'New password required' });
+    }
+    
+    const userId = req.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    const newSalt = generateSalt();
+    const newPasswordHash = await bcrypt.hash(newPassword, 10);
+    
+    db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(newPasswordHash, newSalt, userId);
+    
+    res.json({ salt: newSalt });
+  } catch (err) {
+    console.error('Change password error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 module.exports = router;

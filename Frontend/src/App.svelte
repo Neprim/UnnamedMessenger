@@ -25,7 +25,7 @@
       if (!$auth.isLoading) {
         clearInterval(checkAuth);
         
-        const hasPrivateKey = localStorage.getItem('privateKey') !== null;
+        const hasPrivateKey = sessionStorage.getItem('privateKey') !== null;
         const hasEncryptedKey = localStorage.getItem('encryptedPrivateKey') !== null;
         
         if (hasPrivateKey) {
