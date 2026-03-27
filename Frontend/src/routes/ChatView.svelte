@@ -3,7 +3,7 @@
   import * as crypto from '../lib/crypto';
   import { api, type Message } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
-  import { newMessages } from '../lib/sse';
+  import { sseMessage } from '../lib/sse';
 
   export let params: { id: string };
 
@@ -151,8 +151,6 @@
   let initialized = false;
 
   let unsubscribeSSE: () => void;
-  let processedEventIds = new Set<string>();
-  let processedEditIds = new Set<string>();
 
   onMount(() => {
     const checkAuth = setInterval(() => {
@@ -167,58 +165,45 @@
       initialized = true;
     }, 5000);
 
-    unsubscribeSSE = newMessages.subscribe(events => {
-      console.log('newMessages store updated, events:', events.length, 'current chatId:', params.id);
-      console.log('Events:', events.map(e => ({ chatId: e.chatId, msgId: e.message.id, editedAt: e.message.editedAt })));
+    unsubscribeSSE = sseMessage.subscribe(event => {
+      if (!event) return;
       
-      const eventsToProcess = events.filter(e => e.chatId === params.id);
+      console.log('SSE event received:', event.chatId, event.message.id, event.message.editedAt);
       
-      console.log('Events to process:', eventsToProcess.length);
+      if (event.chatId !== params.id) {
+        console.log('SSE event for different chat, skipping');
+        return;
+      }
       
-      for (const event of eventsToProcess) {
-        const msg = event.message;
-        const isEdited = !!msg.editedAt;
-        
-        if (isEdited) {
-          if (processedEditIds.has(msg.id)) {
-            continue;
-          }
-          processedEditIds.add(msg.id);
+      const msg = event.message;
+      
+      if (msg.editedAt) {
+        console.log('Processing edit for message:', msg.id);
+        if (chatKey) {
+          crypto.decryptMessage(chatKey, msg.content).then(decrypted => {
+            console.log('Decrypted:', decrypted);
+            messages = messages.map(m => m.id === msg.id ? { ...m, content: decrypted, editedAt: msg.editedAt } : m);
+            console.log('Updated messages count:', messages.length);
+          }).catch(err => {
+            console.error('Decrypt failed:', err);
+            messages = messages.map(m => m.id === msg.id ? { ...m, content: '[Decryption failed]', editedAt: msg.editedAt } : m);
+          });
         } else {
-          if (processedEventIds.has(msg.id)) {
-            continue;
-          }
-          processedEventIds.add(msg.id);
+          console.log('No chatKey available');
         }
-        
-        console.log('SSE event:', msg.id, 'editedAt:', msg.editedAt, 'content:', msg.content?.substring(0, 30));
-        
-        if (msg.editedAt) {
-          console.log('Processing edit for message:', msg.id);
-          if (chatKey) {
-            crypto.decryptMessage(chatKey, msg.content).then(decrypted => {
-              console.log('Decrypted:', decrypted);
-              messages = messages.map(m => m.id === msg.id ? { ...m, content: decrypted, editedAt: msg.editedAt } : m);
-              console.log('Updated messages count:', messages.length);
-            }).catch(err => {
-              console.error('Decrypt failed:', err);
-              messages = messages.map(m => m.id === msg.id ? { ...m, content: '[Decryption failed]', editedAt: msg.editedAt } : m);
-            });
-          } else {
-            console.log('No chatKey available');
-          }
+      } else {
+        // Check if this is a new message or delete
+        const existingMsg = messages.find(m => m.id === msg.id);
+        if (existingMsg) {
+          // Delete message
+          messages = messages.filter(m => m.id !== msg.id);
         } else {
-          // Check if this is a new message or delete
-          const existingMsg = messages.find(m => m.id === msg.id);
-          if (existingMsg) {
-            // Delete message
-            messages = messages.filter(m => m.id !== msg.id);
-          } else {
-            // New message - use handleNewEvent
-            handleNewEvent(msg);
-          }
+          // New message - use handleNewEvent
+          handleNewEvent(msg);
         }
       }
+      
+      sseMessage.set(null);
     });
   });
 
@@ -284,8 +269,6 @@
     chatDetail = null;
     messages = [];
     chatKey = null;
-    processedEventIds = new Set<string>();
-    processedEditIds = new Set<string>();
     
     const container = document.querySelector('.messages') as HTMLElement;
     if (container) container.scrollTop = 0;
