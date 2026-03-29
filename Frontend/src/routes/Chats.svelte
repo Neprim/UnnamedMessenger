@@ -26,7 +26,7 @@
             const chatKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
             chatsStore.setChatKey(chat.id, chatKey);
           } catch (e) {
-            console.error('Не удалось расшифровать ключ чата:', e);
+            
           }
         }
       }

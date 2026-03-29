@@ -43,19 +43,40 @@ router.get('/', authenticate, (req, res) => {
   try {
     const chats = db.prepare(`
       SELECT c.id, c.type, c.name, c.created_at,
-        (SELECT COUNT(*) FROM chat_members WHERE chat_id = c.id) as member_count
+        (SELECT COUNT(*) FROM chat_members WHERE chat_id = c.id) as member_count,
+        cm.last_read_at
       FROM chats c
       JOIN chat_members cm ON c.id = cm.chat_id
       WHERE cm.user_id = ?
       ORDER BY c.created_at DESC
     `).all(req.userId);
     
-    const result = chats.map(chat => ({
-      id: chat.id,
-      type: chat.type,
-      name: chat.name,
-      memberCount: chat.member_count
-    }));
+    const result = chats.map(chat => {
+      let unreadCount = 0;
+      let firstUnreadId = null;
+      
+      if (chat.last_read_at > 0) {
+        const unreadInfo = db.prepare(`
+          SELECT id FROM messages 
+          WHERE chat_id = ? AND timestamp > ?
+          ORDER BY timestamp ASC LIMIT 1
+        `).get(chat.id, chat.last_read_at);
+        
+        if (unreadInfo) {
+          firstUnreadId = unreadInfo.id;
+          unreadCount = db.prepare('SELECT COUNT(*) as count FROM messages WHERE chat_id = ? AND timestamp > ?').get(chat.id, chat.last_read_at).count;
+        }
+      }
+      
+      return {
+        id: chat.id,
+        type: chat.type,
+        name: chat.name,
+        memberCount: chat.member_count,
+        unreadCount,
+        firstUnreadId
+      };
+    });
     
     res.json(result);
   } catch (err) {
@@ -100,27 +121,21 @@ router.post('/', authenticate, (req, res) => {
     
     db.prepare('INSERT INTO chats (id, type, name, created_by) VALUES (?, ?, ?, ?)').run(chatId, type, name || null, req.userId);
     
-    db.prepare('INSERT INTO chat_members (chat_id, user_id, encrypted_chat_key) VALUES (?, ?, ?)').run(chatId, req.userId, encryptedKey);
+    db.prepare('INSERT INTO chat_members (chat_id, user_id, encrypted_chat_key, last_read_at) VALUES (?, ?, ?, 0)').run(chatId, req.userId, encryptedKey);
     
     if (members && members.length > 0) {
       const creator = db.prepare('SELECT username FROM users WHERE id = ?').get(req.userId);
       
       for (const userId of members) {
         const memberKey = memberKeys?.[userId] || null;
-        db.prepare('INSERT INTO chat_members (chat_id, user_id, encrypted_chat_key) VALUES (?, ?, ?)').run(chatId, userId, memberKey);
+        db.prepare('INSERT INTO chat_members (chat_id, user_id, encrypted_chat_key, last_read_at) VALUES (?, ?, ?, 0)').run(chatId, userId, memberKey);
         
         let systemMsg, eventType, eventData;
         
-        if (type === 'pm') {
-          systemMsg = createSystemMessage(chatId, 'personal_chat_created', { creatorUsername: creator.username, creatorId: req.userId });
-          eventType = 'member_added';
-          eventData = { username: creator.username, userId: req.userId };
-        } else {
-          const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
-          systemMsg = createSystemMessage(chatId, 'member_added', { username: user.username, userId });
-          eventType = 'member_added';
-          eventData = { username: user.username, userId };
-        }
+        const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+        systemMsg = createSystemMessage(chatId, 'member_added', { username: user.username, userId });
+        eventType = 'member_added';
+        eventData = { username: user.username, userId };
         
         const memberCount = db.prepare('SELECT COUNT(*) as count FROM chat_members WHERE chat_id = ?').get(chatId).count;
         
@@ -135,6 +150,8 @@ router.post('/', authenticate, (req, res) => {
         });
       }
     }
+    
+    createSystemMessage(chatId, 'chat_created', {});
     
     res.status(201).json({ id: chatId, type, name });
   } catch (err) {
@@ -304,7 +321,7 @@ router.post('/:chatId/members/add', authenticate, (req, res) => {
       return res.status(400).json({ error: 'User already in chat' });
     }
     
-    db.prepare('INSERT INTO chat_members (chat_id, user_id, encrypted_chat_key) VALUES (?, ?, ?)').run(req.params.chatId, userId, encryptedKey);
+    db.prepare('INSERT INTO chat_members (chat_id, user_id, encrypted_chat_key, last_read_at) VALUES (?, ?, ?, 0)').run(req.params.chatId, userId, encryptedKey);
     
     const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
     const systemMsg = createSystemMessage(req.params.chatId, 'member_added', { username: user.username, userId });
@@ -395,34 +412,83 @@ router.get('/:chatId/messages', authenticate, (req, res) => {
       return res.status(404).json({ error: 'Chat not found' });
     }
     
-    const isMember = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(req.params.chatId, req.userId);
+    const isMember = db.prepare('SELECT last_read_at FROM chat_members WHERE chat_id = ? AND user_id = ?').get(req.params.chatId, req.userId);
     if (!isMember) {
       return res.status(403).json({ error: 'Access denied' });
     }
     
-    const { cursor, limit = 50 } = req.query;
+    const lastReadAt = isMember.last_read_at || 0;
+    
+    const { cursor, limit = 50, beforeCnt, afterCnt } = req.query;
     const limitNum = Math.min(parseInt(limit) || 50, 100);
+    const beforeCntNum = parseInt(beforeCnt) || 0;
+    const afterCntNum = parseInt(afterCnt) || 0;
     
-    let query = 'SELECT id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE chat_id = ?';
-    const params = [req.params.chatId];
+    let messages = [];
+    let hasMoreBefore = false;
+    let hasMoreAfter = false;
     
-    if (cursor) {
-      query += ' AND timestamp < (SELECT timestamp FROM messages WHERE id = ?)';
-      params.push(cursor);
+    if (beforeCntNum > 0 && cursor) {
+      // Load N messages BEFORE cursor
+      const cursorMsg = db.prepare('SELECT timestamp FROM messages WHERE id = ?').get(cursor);
+      if (cursorMsg) {
+        const query = 'SELECT id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE chat_id = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT ?';
+        messages = db.prepare(query).all(req.params.chatId, cursorMsg.timestamp, beforeCntNum + 1);
+        hasMoreBefore = messages.length > beforeCntNum;
+        if (hasMoreBefore) messages.pop();
+        messages = messages.reverse();
+      }
+    } else if (afterCntNum > 0 && cursor) {
+      // Load N messages AFTER cursor
+      const cursorMsg = db.prepare('SELECT timestamp FROM messages WHERE id = ?').get(cursor);
+      if (cursorMsg) {
+        const query = 'SELECT id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE chat_id = ? AND timestamp > ? ORDER BY timestamp ASC LIMIT ?';
+        messages = db.prepare(query).all(req.params.chatId, cursorMsg.timestamp, afterCntNum + 1);
+        hasMoreAfter = messages.length > afterCntNum;
+        if (hasMoreAfter) messages.pop();
+      }
+    } else {
+      // Default: load last N messages
+      let query = 'SELECT id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE chat_id = ?';
+      const params = [req.params.chatId];
+      
+      if (cursor) {
+        query += ' AND timestamp < (SELECT timestamp FROM messages WHERE id = ?)';
+        params.push(cursor);
+      }
+      
+      query += ' ORDER BY timestamp DESC LIMIT ?';
+      params.push(limitNum + 1);
+      
+      messages = db.prepare(query).all(...params);
+      
+      const hasMore = messages.length > limitNum;
+      if (hasMore) {
+        messages.pop();
+      }
+      hasMoreAfter = hasMore;
+      messages = messages.reverse();
     }
     
-    query += ' ORDER BY timestamp DESC LIMIT ?';
-    params.push(limitNum + 1);
+    // Get first unread info
+    let firstUnreadId = null;
+    let unreadCount = 0;
     
-    const messages = db.prepare(query).all(...params);
-    
-    const hasMore = messages.length > limitNum;
-    if (hasMore) {
-      messages.pop();
+    if (lastReadAt > 0) {
+      const unreadInfo = db.prepare(`
+        SELECT id, timestamp FROM messages 
+        WHERE chat_id = ? AND timestamp > ?
+        ORDER BY timestamp ASC LIMIT 1
+      `).get(req.params.chatId, lastReadAt);
+      
+      if (unreadInfo) {
+        firstUnreadId = unreadInfo.id;
+        unreadCount = db.prepare('SELECT COUNT(*) as count FROM messages WHERE chat_id = ? AND timestamp > ?').get(req.params.chatId, lastReadAt).count;
+      }
     }
     
     res.json({
-      messages: messages.reverse().map(m => ({
+      messages: messages.map(m => ({
         id: m.id,
         senderId: m.sender_id,
         content: m.content,
@@ -430,7 +496,10 @@ router.get('/:chatId/messages', authenticate, (req, res) => {
         timestamp: m.timestamp,
         editedAt: m.edited_at
       })),
-      nextCursor: hasMore ? messages[messages.length - 1].id : null
+      hasMoreBefore,
+      hasMoreAfter,
+      firstUnreadId,
+      unreadCount
     });
   } catch (err) {
     console.error('Get messages error:', err);
@@ -466,6 +535,9 @@ router.post('/:chatId/messages', authenticate, (req, res) => {
     
     const message = db.prepare('SELECT id, sender_id, content, file_ids, timestamp FROM messages WHERE id = ?').get(messageId);
     
+    // Mark sender's messages as read
+    db.prepare('UPDATE chat_members SET last_read_at = ? WHERE chat_id = ? AND user_id = ?').run(message.timestamp, req.params.chatId, req.userId);
+    
     const response = {
       id: message.id,
       chatId: req.params.chatId,
@@ -480,6 +552,30 @@ router.post('/:chatId/messages', authenticate, (req, res) => {
     res.status(201).json(response);
   } catch (err) {
     console.error('Send message error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.patch('/:chatId/read', authenticate, (req, res) => {
+  try {
+    const chat = db.prepare('SELECT id FROM chats WHERE id = ?').get(req.params.chatId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    const isMember = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(req.params.chatId, req.userId);
+    if (!isMember) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    const lastMessage = db.prepare('SELECT MAX(timestamp) as max FROM messages WHERE chat_id = ?').get(req.params.chatId);
+    const lastReadAt = lastMessage.max || 0;
+    
+    db.prepare('UPDATE chat_members SET last_read_at = ? WHERE chat_id = ? AND user_id = ?').run(lastReadAt, req.params.chatId, req.userId);
+    
+    res.json({ success: true, lastReadAt });
+  } catch (err) {
+    console.error('Mark as read error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

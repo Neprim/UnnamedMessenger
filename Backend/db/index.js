@@ -31,6 +31,7 @@ function initializeDatabase() {
       user_id TEXT NOT NULL,
       encrypted_chat_key TEXT,
       joined_at INTEGER DEFAULT (strftime('%s', 'now')),
+      last_read_at INTEGER DEFAULT 0,
       PRIMARY KEY (chat_id, user_id),
       FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE

@@ -137,10 +137,18 @@ export const api = {
         body: JSON.stringify({ userId }) 
       }),
     
-    getMessages: (chatId: string, limit: number = 50) => {
-      const url = `/chats/${chatId}/messages?limit=${limit}`;
-      return request<{ messages: Message[]; nextCursor: string | null }>(url);
+    getMessages: (chatId: string, options: { limit?: number; cursor?: string; beforeCnt?: number; afterCnt?: number } = {}) => {
+      const params = new URLSearchParams();
+      if (options.limit) params.set('limit', String(options.limit));
+      if (options.cursor) params.set('cursor', options.cursor);
+      if (options.beforeCnt) params.set('beforeCnt', String(options.beforeCnt));
+      if (options.afterCnt) params.set('afterCnt', String(options.afterCnt));
+      const url = `/chats/${chatId}/messages?${params.toString()}`;
+      return request<{ messages: Message[]; hasMoreBefore: boolean; hasMoreAfter: boolean; firstUnreadId: string | null; unreadCount: number }>(url);
     },
+    
+    markAsRead: (chatId: string) =>
+      request<{ success: boolean; lastReadAt: number }>(`/chats/${chatId}/read`, { method: 'PATCH' }),
     
     sendMessage: (chatId: string, content: string, fileIds?: string[]) => 
       request<Message>(`/chats/${chatId}/messages`, { 

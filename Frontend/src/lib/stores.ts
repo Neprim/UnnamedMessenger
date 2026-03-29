@@ -118,7 +118,8 @@ export interface Chat {
   name: string | null;
   memberCount: number;
   chatKey?: CryptoKey;
-  members?: string[];
+  members?: any[];
+  messages?: any[];
   lastMessage?: {
     senderId: string | null;
     content: string;
@@ -129,6 +130,8 @@ export interface Chat {
     id: string;
     username: string;
   } | null;
+  unreadCount?: number;
+  firstUnreadId?: string | null;
 }
 
 function createChatsStore() {
@@ -147,6 +150,26 @@ function createChatsStore() {
     },
     setChatKey: (chatId: string, chatKey: CryptoKey) => {
       update(chats => chats.map(c => c.id === chatId ? { ...c, chatKey } : c));
+    },
+    incrementUnread: (chatId: string) => {
+      update(chats => chats.map(c => c.id === chatId ? { ...c, unreadCount: (c.unreadCount || 0) + 1 } : c));
+    },
+    clearUnread: (chatId: string) => {
+      update(chats => chats.map(c => c.id === chatId ? { ...c, unreadCount: 0, firstUnreadId: null } : c));
+    },
+    addMessages: (chatId: string, newMessages: any[], prepend = false) => {
+      update(chats => chats.map(c => {
+        if (c.id !== chatId) return c;
+        const existingMessages = c.messages || [];
+        const existingIds = new Set(existingMessages.map((m: any) => m.id));
+        const uniqueNewMessages = newMessages.filter((m: any) => !existingIds.has(m.id));
+        if (uniqueNewMessages.length === 0) return c;
+        if (prepend) {
+          return { ...c, messages: [...uniqueNewMessages, ...existingMessages] };
+        } else {
+          return { ...c, messages: [...existingMessages, ...uniqueNewMessages] };
+        }
+      }));
     }
   };
 }

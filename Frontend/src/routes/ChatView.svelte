@@ -5,9 +5,12 @@
   import { auth, chats, type Chat } from '../lib/stores';
   import { sseMessage } from '../lib/sse';
 
-  export let params: { id: string };
+  const INITIAL_LOAD_COUNT = 10;
+  const LOAD_MORE_COUNT = 20;
 
-  let chatDetail: any = null;
+  export let params: { id: string };
+  export let chatDetail: any = null;
+
   let messages: Message[] = [];
   let loading = true;
   let error = '';
@@ -24,8 +27,43 @@
   let contextMenu: { x: number; y: number; messageId: string; senderId: string; visible: boolean } = { x: 0, y: 0, messageId: '', senderId: '', visible: false };
   let editingMessage: { id: string; content: string } | null = null;
   let editingText = '';
-
+  let messagesContainer: HTMLElement;
+  let placeholderEl: HTMLElement;
+  let isLoadingMore = false;
+  let hasReachedBeginning = false;
+  let showPlaceholder = false;
+  let scrollHandlerEnabled = true;
+  let scrollTimeout: ReturnType<typeof setTimeout> | null = null;
+  let lastReadAt = 0;
   $: isCreator = chatDetail?.createdBy === $auth.user?.id;
+  $: chatMessages = $chats.find((c: any) => c.id === params.id)?.messages || [];
+
+  function handleContainerScroll() {
+    if (!messagesContainer) return;
+    
+    const scrollTop = messagesContainer.scrollTop;
+    const scrollHeight = messagesContainer.scrollHeight;
+    const clientHeight = messagesContainer.clientHeight;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+    
+    // Получить unreadCount напрямую из store
+    const chat = $chats.find((c: any) => c.id === params.id);
+    const unreadCount = chat?.unreadCount || 0;
+    
+    // Если внизу и есть непрочитанные - отметить как прочитанные
+    if (isAtBottom && unreadCount > 0) {
+      api.chats.markAsRead(params.id);
+      chats.clearUnread(params.id);
+    }
+    
+    // Load more messages when scrolled to top
+    if (scrollHandlerEnabled && !isLoadingMore && !hasReachedBeginning && showPlaceholder && scrollTop < 100) {
+      if (scrollTimeout) clearTimeout(scrollTimeout);
+      scrollTimeout = setTimeout(() => {
+        loadMoreMessages();
+      }, 300);
+    }
+  }
 
   function handleContextMenu(e: MouseEvent, messageId: string, senderId: string) {
     e.preventDefault();
@@ -63,7 +101,7 @@
   let groupedMessages: { senderId: string; senderUsername: string; messages: Message[]; isSystem: boolean }[] = [];
 
   function groupMessages(msgs: Message[], members: any[]): typeof groupedMessages {
-    const memberMap = new Map(members.map(m => [m.id, m.username]));
+    const memberMap = members ? new Map(members.map((m: any) => [m.id, m.username])) : new Map();
     const groups: typeof groupedMessages = [];
     let currentGroup: typeof groupedMessages[0] | null = null;
 
@@ -83,7 +121,9 @@
         continue;
       }
 
-      const senderUsername = memberMap.get(msg.senderId) || 'Unknown';
+      // Использовать senderUsername из сообщения (приоритет), затем из members
+      const msgSenderUsername = (msg as any).senderUsername;
+      const senderUsername = msgSenderUsername || memberMap.get(msg.senderId) || 'Unknown';
       const timestamp = new Date(msg.timestamp).getTime();
 
       if (currentGroup && currentGroup.senderId === msg.senderId) {
@@ -154,13 +194,148 @@
       editingMessage = null;
       editingText = '';
     } catch (e) {
-      console.error('Failed to edit message:', e);
+      
     }
   }
 
   function cancelEdit() {
     editingMessage = null;
     editingText = '';
+  }
+
+  async function loadOlderMessages() {
+    if (loadingMoreBefore || !hasMoreBefore) return;
+    const oldestMsg = messages[0];
+    if (!oldestMsg) return;
+    
+    // Если chatKey не инициализирован, получить из store
+    if (!chatKey) {
+      const chatFromStore = $chats.find((c: any) => c.id === params.id);
+      chatKey = chatFromStore?.chatKey || null;
+    }
+    
+    loadingMoreBefore = true;
+    try {
+      const result = await api.chats.getMessages(params.id, { cursor: oldestMsg.id, beforeCnt: 50 });
+      hasMoreBefore = result.hasMoreBefore;
+      
+      if (result.messages.length > 0 && chatKey) {
+        const memberMap = new Map(chatDetail?.members?.map((m: any) => [m.id, m.username]) || []);
+        const decrypted = await Promise.all(
+          result.messages.map(async (msg: any) => {
+            const isSystem = msg.senderId === null || msg.senderId === undefined || msg.senderId === 'null';
+            if (isSystem) return msg;
+            const senderUsername = memberMap.get(msg.senderId) || 'Unknown';
+            try {
+              return { ...msg, content: await crypto.decryptMessage(chatKey!, msg.content), senderUsername };
+            } catch {
+              return { ...msg, content: '[Decryption failed]', senderUsername };
+            }
+          })
+        );
+        messages = [...decrypted, ...messages];
+      }
+    } catch (e) {
+      
+    } finally {
+      loadingMoreBefore = false;
+    }
+  }
+
+  async function loadMoreMessages() {
+    if (isLoadingMore || hasReachedBeginning || !messagesContainer) return;
+    const oldestMsg = messages[0];
+    if (!oldestMsg) return;
+    
+    // Всегда получать актуальный chatKey из store
+    let currentChatKey: CryptoKey | null = null;
+    const chatFromStore = $chats.find((c: any) => c.id === params.id);
+    currentChatKey = chatFromStore?.chatKey || null;
+    
+    // Также пробуем расшифровать из currentMember если в store нет
+    if (!currentChatKey && chatDetail?.members && $auth.privateKey) {
+      const currentMember = chatDetail.members.find((m: any) => m.id === $auth.user?.id);
+      if (currentMember?.encryptedKey) {
+        try {
+          currentChatKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
+        } catch (e) {
+          
+        }
+      }
+    }
+    
+    // Обновить локальную переменную и store
+    chatKey = currentChatKey;
+    if (chatKey) {
+      chats.setChatKey(params.id, chatKey);
+    }
+    
+    isLoadingMore = true;
+    scrollHandlerEnabled = false;
+    
+    const scrollHeightBefore = messagesContainer.scrollHeight;
+    const scrollTopBefore = messagesContainer.scrollTop;
+    
+    try {
+      const result = await api.chats.getMessages(params.id, { cursor: oldestMsg.id, limit: LOAD_MORE_COUNT });
+      
+      if (result.messages.length > 0) {
+        // Check if we reached the beginning (chat_created message)
+        const newOldest = result.messages[0];
+        if (newOldest && newOldest.senderId === null) {
+          try {
+            const parsed = JSON.parse(newOldest.content || '{}');
+            if (parsed.event === 'chat_created') {
+              hasReachedBeginning = true;
+            }
+          } catch {}
+        }
+        
+        if (currentChatKey) {
+          const memberMap = new Map(chatDetail?.members?.map((m: any) => [m.id, m.username]) || []);
+          const decrypted = await Promise.all(
+            result.messages.map(async (msg: any) => {
+              const isSystem = msg.senderId === null || msg.senderId === undefined || msg.senderId === 'null';
+              if (isSystem) return msg;
+              const senderUsername = memberMap.get(msg.senderId) || 'Unknown';
+              try {
+                const decryptedContent = await crypto.decryptMessage(currentChatKey!, msg.content);
+                return { ...msg, content: decryptedContent, senderUsername };
+              } catch {
+                return { ...msg, content: '[Decryption failed]', senderUsername };
+              }
+            })
+          );
+          messages = [...decrypted, ...messages];
+          chats.addMessages(params.id, decrypted, true);
+        } else {
+          const memberMap = new Map(chatDetail?.members?.map((m: any) => [m.id, m.username]) || []);
+          const msgsWithUsername = result.messages.map((msg: any) => {
+            if (msg.senderId === null) return msg;
+            return { ...msg, senderUsername: memberMap.get(msg.senderId) || 'Unknown' };
+          });
+          messages = [...msgsWithUsername, ...messages];
+          chats.addMessages(params.id, msgsWithUsername, true);
+        }
+        
+        // Update placeholder visibility
+        showPlaceholder = !hasReachedBeginning;
+        
+        // Maintain scroll position
+        requestAnimationFrame(() => {
+          if (messagesContainer) {
+            const scrollHeightAfter = messagesContainer.scrollHeight;
+            const scrollDiff = scrollHeightAfter - scrollHeightBefore;
+            messagesContainer.scrollTop = scrollTopBefore + scrollDiff;
+          }
+        });
+      }
+    } catch (e) {
+      
+    } finally {
+      isLoadingMore = false;
+      scrollHandlerEnabled = true;
+    }
   }
 
   let initialized = false;
@@ -183,22 +358,16 @@
     unsubscribeSSE = sseMessage.subscribe(async event => {
       if (!event) return;
       
-      console.log('SSE event received:', event.chatId, event.message.id, event.message.editedAt);
-      
       if (event.chatId !== params.id) {
-        console.log('SSE event for different chat, skipping');
         return;
       }
       
       const msg = event.message;
       
       if (msg.editedAt) {
-        console.log('Processing edit for message:', msg.id);
         if (chatKey) {
           crypto.decryptMessage(chatKey, msg.content).then(decrypted => {
-            console.log('Decrypted:', decrypted);
             messages = messages.map(m => m.id === msg.id ? { ...m, content: decrypted, editedAt: msg.editedAt } : m);
-            console.log('Updated messages count:', messages.length);
             
             // Update lastMessage in chat list
             const lastMsg = messages[messages.length - 1];
@@ -214,11 +383,9 @@
               });
             }
           }).catch(err => {
-            console.error('Decrypt failed:', err);
+            
             messages = messages.map(m => m.id === msg.id ? { ...m, content: '[Decryption failed]', editedAt: msg.editedAt } : m);
           });
-        } else {
-          console.log('No chatKey available');
         }
       } else {
         // Check if this is a new message or delete
@@ -238,7 +405,7 @@
                   const lastMsg = result.messages[result.messages.length - 1];
                   if (lastMsg.senderId === null) {
                     const parsed = JSON.parse(lastMsg.content || '{}');
-                    const systemContent = parsed.event === 'personal_chat_created' ? 'Личный чат создан' : 
+                    const systemContent = parsed.event === 'chat_created' ? 'Чат создан' : 
                                           parsed.event === 'member_added' ? `${parsed.username} добавлен в чат` :
                                           parsed.event === 'member_removed' ? `${parsed.username} удалён из чата` :
                                           parsed.event === 'member_left' ? `${parsed.username} покинул чат` : '';
@@ -256,7 +423,7 @@
                   chats.updateChat(params.id, { lastMessage: null });
                 }
               } catch (e) {
-                console.error('Failed to load last message:', e);
+                
                 chats.updateChat(params.id, { lastMessage: null });
               }
             } else {
@@ -275,10 +442,11 @@
 
   onDestroy(() => {
     if (unsubscribeSSE) unsubscribeSSE();
+    if (scrollTimeout) clearTimeout(scrollTimeout);
   });
 
   function getSystemMessageContent(event: string, data: any): string {
-    if (event === 'personal_chat_created') return 'Личный чат создан';
+    if (event === 'chat_created') return 'Чат создан';
     if (event === 'member_added') return `${data.username} добавлен в чат`;
     if (event === 'member_removed') return `${data.username} удалён из чата`;
     if (event === 'member_left') return `${data.username} покинул чат`;
@@ -286,10 +454,18 @@
   }
 
   async function handleNewEvent(message: Message) {
+    // Ensure chatDetail is loaded for username lookup
+    if (!chatDetail) {
+      chatDetail = await api.chats.get(params.id);
+    }
+    
     const isSystem = message.senderId === null || message.senderId === undefined || message.senderId === 'null';
+    const isOwnMessage = message.senderId === $auth.user?.id;
+    
     if (isSystem) {
       const parsed = JSON.parse(message.content || '{}');
       messages = [...messages, message];
+      chats.addMessages(params.id, [message], false);
       chatDetail = await api.chats.get(params.id);
       
       const systemContent = getSystemMessageContent(parsed.event, parsed);
@@ -304,20 +480,34 @@
     } else if (chatKey) {
       try {
         const decryptedContent = await crypto.decryptMessage(chatKey, message.content);
-        messages = [...messages, { ...message, content: decryptedContent }];
-        
         const currentUser = chatDetail?.members?.find((m: any) => m.id === message.senderId);
+        const senderUsername = currentUser?.username || 'Unknown';
+        const decryptedMessage = { ...message, content: decryptedContent, senderUsername };
+        messages = [...messages, decryptedMessage];
+        chats.addMessages(params.id, [decryptedMessage], false);
+        
         chats.updateChat(params.id, {
           lastMessage: {
             senderId: message.senderId,
             content: decryptedContent,
-            senderUsername: currentUser?.username || 'Unknown',
+            senderUsername: senderUsername,
             isSystem: false
           }
         });
       } catch {
-        messages = [...messages, { ...message, content: '[Decryption failed]' }];
+        const currentUser = chatDetail?.members?.find((m: any) => m.id === message.senderId);
+        const senderUsername = currentUser?.username || 'Unknown';
+        const failedMessage = { ...message, content: '[Decryption failed]', senderUsername };
+        messages = [...messages, failedMessage];
+        chats.addMessages(params.id, [failedMessage], false);
       }
+    } else {
+      // No chatKey yet, add message as-is with username lookup
+      const currentUser = chatDetail?.members?.find((m: any) => m.id === message.senderId);
+      const senderUsername = currentUser?.username || 'Unknown';
+      const msgWithUsername = { ...message, senderUsername };
+      messages = [...messages, msgWithUsername];
+      chats.addMessages(params.id, [msgWithUsername], false);
     }
     requestAnimationFrame(() => {
       const container = document.querySelector('.messages') as HTMLElement;
@@ -332,12 +522,10 @@
   async function loadChat() {
     loading = true;
     error = '';
-    chatDetail = null;
-    messages = [];
-    chatKey = null;
+    isLoadingMore = false;
+    hasReachedBeginning = false;
     
-    const container = document.querySelector('.messages') as HTMLElement;
-    if (container) container.scrollTop = 0;
+    if (messagesContainer) messagesContainer.scrollTop = 0;
 
     if (!$auth.privateKey || $auth.isLoading) {
       loading = false;
@@ -345,87 +533,96 @@
     }
 
     try {
-      chatDetail = await api.chats.get(params.id);
+      const chatDetailData = chatDetail || await api.chats.get(params.id);
+      chatDetail = chatDetailData;
       
-      const currentMember = chatDetail.members.find((m: any) => m.id === $auth.user?.id);
-      if (currentMember && $auth.privateKey) {
-        chatKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
-      }
-
-      let otherUserName: string | null = null;
-      if (chatDetail.type === 'pm') {
-        const otherMember = chatDetail.members.find((m: any) => m.id !== $auth.user?.id);
-        otherUserName = otherMember?.username || null;
-      }
-
-      const result = await api.chats.getMessages(params.id);
+      const currentMember = chatDetailData?.members?.find((m: any) => m.id === $auth.user?.id);
       
-      if (chatKey) {
-        const decryptedMessages = await Promise.all(
-          result.messages.map(async (msg) => {
-            const isSystem = msg.senderId === null || msg.senderId === undefined || msg.senderId === 'null';
-            if (isSystem) {
-              return msg;
-            }
-            try {
-              return {
-                ...msg,
-                content: await crypto.decryptMessage(chatKey!, msg.content)
-              };
-            } catch {
-              return { ...msg, content: '[Decryption failed]' };
-            }
-          })
-        );
-        messages = decryptedMessages;
+      // Use messages from $chats store if available, otherwise load from API
+      const chatFromStore = $chats.find((c: any) => c.id === params.id);
+      
+      // Всегда пытаться получить или расшифровать chatKey
+      if (chatFromStore?.chatKey) {
+        chatKey = chatFromStore.chatKey;
+      } else if (currentMember && $auth.privateKey && currentMember.encryptedKey) {
+        // Пробуем расшифровать
+        try {
+          chatKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
+          // Сохраняем в store для будущих использований
+          if (chatKey) {
+            chats.setChatKey(params.id, chatKey);
+          }
+        } catch (e) {
+          
+        }
+      }
+      
+      if (chatMessages.length > 0) {
+        messages = chatMessages;
+      } else {
+        const result = await api.chats.getMessages(params.id, { limit: INITIAL_LOAD_COUNT });
+        messages = result.messages;
         
-        if (result.messages.length > 0) {
-          const lastMsg = result.messages[result.messages.length - 1];
-          if (lastMsg.senderId === null) {
-            const parsed = JSON.parse(lastMsg.content || '{}');
-            const systemContent = parsed.event === 'personal_chat_created' ? 'Личный чат создан' : 
-                                  parsed.event === 'member_added' ? `${parsed.username} добавлен в чат` :
-                                  parsed.event === 'member_removed' ? `${parsed.username} удалён из чата` :
-                                  parsed.event === 'member_left' ? `${parsed.username} покинул чат` : '';
-            chats.updateChat(params.id, {
-              lastMessage: {
-                senderId: null,
-                content: systemContent,
-                isSystem: true
+        // Decrypt messages only when loading from API (not from store)
+        if (chatKey) {
+          const memberMap = new Map(chatDetail?.members?.map((m: any) => [m.id, m.username]) || []);
+          messages = await Promise.all(
+            messages.map(async (msg: any) => {
+              const isSystem = msg.senderId === null || msg.senderId === undefined || msg.senderId === 'null';
+              if (isSystem) return msg;
+              const senderUsername = memberMap.get(msg.senderId) || 'Unknown';
+              try {
+                return { ...msg, content: await crypto.decryptMessage(chatKey!, msg.content), senderUsername };
+              } catch {
+                return { ...msg, content: '[Decryption failed]', senderUsername };
               }
-            });
-          } else {
-            try {
-              const decryptedContent = await crypto.decryptMessage(chatKey, lastMsg.content);
-              const sender = chatDetail?.members?.find((m: any) => m.id === lastMsg.senderId);
-              chats.updateChat(params.id, {
-                lastMessage: {
-                  senderId: lastMsg.senderId,
-                  content: decryptedContent,
-                  senderUsername: sender?.username || 'Unknown',
-                  isSystem: false
-                }
-              });
-            } catch {
-              chats.updateChat(params.id, {
-                lastMessage: {
-                  senderId: lastMsg.senderId,
-                  content: '[Decryption failed]',
-                  senderUsername: 'Unknown',
-                  isSystem: false
-                }
-              });
-            }
+            })
+          );
+        }
+      }
+      
+      lastReadAt = currentMember?.lastReadAt || 0;
+      
+      // Check if we reached the beginning (chat_created message)
+      const oldestMsg = messages[0];
+      if (oldestMsg && oldestMsg.senderId === null) {
+        try {
+          const parsed = JSON.parse(oldestMsg.content || '{}');
+          if (parsed.event === 'chat_created') {
+            hasReachedBeginning = true;
+          }
+        } catch {}
+      }
+      
+      // Show placeholder if we haven't reached the beginning
+      showPlaceholder = !hasReachedBeginning;
+      
+      // Update lastMessage in chat list
+      if (messages.length > 0) {
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg.senderId === null) {
+          const parsed = JSON.parse(lastMsg.content || '{}');
+          const systemContent = parsed.event === 'chat_created' ? 'Чат создан' : 
+                                parsed.event === 'member_added' ? `${parsed.username} добавлен в чат` :
+                                parsed.event === 'member_removed' ? `${parsed.username} удалён из чата` :
+                                parsed.event === 'member_left' ? `${parsed.username} покинул чат` : '';
+          chats.updateChat(params.id, { lastMessage: { senderId: null, content: systemContent, isSystem: true } });
+        } else {
+          try {
+            const sender = chatDetail?.members?.find((m: any) => m.id === lastMsg.senderId);
+            chats.updateChat(params.id, { lastMessage: { senderId: lastMsg.senderId, content: lastMsg.content, senderUsername: sender?.username || 'Unknown', isSystem: false } });
+          } catch {
+            chats.updateChat(params.id, { lastMessage: { senderId: lastMsg.senderId, content: '[Decryption failed]', senderUsername: 'Unknown', isSystem: false } });
           }
         }
-      } else {
-        messages = result.messages;
       }
-
-      requestAnimationFrame(() => {
-        const container = document.querySelector('.messages') as HTMLElement;
-        if (container) container.scrollTop = container.scrollHeight;
-      });
+       
+      // Scroll to bottom after load
+      setTimeout(() => {
+        if (messagesContainer) {
+          messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+      }, 100);
     } catch (e) {
       error = e instanceof Error ? e.message : 'Не удалось загрузить чат';
     } finally {
@@ -440,7 +637,9 @@
     try {
       const encryptedContent = await crypto.encryptMessage(chatKey, newMessage);
       const message = await api.chats.sendMessage(params.id, encryptedContent);
-      messages = [...messages, { ...message, content: newMessage }];
+      const newMsg = { ...message, content: newMessage };
+      messages = [...messages, newMsg];
+      chats.addMessages(params.id, [newMsg], false);
       
       chats.updateChat(params.id, {
         lastMessage: {
@@ -455,6 +654,7 @@
       requestAnimationFrame(() => {
         const container = document.querySelector('.messages') as HTMLElement;
         if (container) container.scrollTop = container.scrollHeight;
+        (document.getElementById('messageInput') as HTMLInputElement)?.focus();
       });
     } catch (e) {
       error = e instanceof Error ? e.message : 'Не удалось отправить сообщение';
@@ -475,7 +675,7 @@
         if (lastMsg) {
           if (lastMsg.senderId === null) {
             const parsed = JSON.parse(lastMsg.content || '{}');
-            const systemContent = parsed.event === 'personal_chat_created' ? 'Личный чат создан' : 
+            const systemContent = parsed.event === 'chat_created' ? 'Чат создан' : 
                                   parsed.event === 'member_added' ? `${parsed.username} добавлен в чат` :
                                   parsed.event === 'member_removed' ? `${parsed.username} удалён из чата` :
                                   parsed.event === 'member_left' ? `${parsed.username} покинул чат` : '';
@@ -597,13 +797,18 @@
   {:else if error}
     <div class="error">{error}</div>
   {:else}
-    <div class="messages">
+    <div class="messages" bind:this={messagesContainer} on:scroll={handleContainerScroll}>
+      {#if showPlaceholder}
+        <div class="load-more-placeholder" bind:this={placeholderEl}>
+          Загрузка...
+        </div>
+      {/if}
       {#each groupedMessages as group}
         {#if group.isSystem}
           {@const systemData = (() => { try { return JSON.parse(group.messages[0].content || '{}'); } catch { return { event: 'unknown', raw: group.messages[0].content }; } })()}
           <div class="system-message">
             <span class="system-content">
-              {systemData.event === 'personal_chat_created' ? `Личный чат создан пользователем ${systemData.creatorUsername}` : 
+              {systemData.event === 'chat_created' ? 'Чат создан' : 
                systemData.event === 'member_added' ? `${systemData.username} добавлен в чат` : 
                systemData.event === 'member_removed' ? `${systemData.username} удалён из чата` :
                systemData.event === 'member_left' ? `${systemData.username} покинул чат` : systemData.raw || group.messages[0].content}
@@ -615,15 +820,15 @@
         {:else}
            <div class="message-group">
              <div class="message-header">
-               <div class="avatar">{group.senderUsername.charAt(0).toUpperCase()}</div>
-               <span class="sender-name">{group.senderUsername}</span>
+               <div class="avatar">{(group.senderUsername || '?').charAt(0).toUpperCase()}</div>
+               <span class="sender-name">{group.senderUsername || 'Unknown'}</span>
              </div>
-             {#each group.messages as msg, i}
-               <div class="message" class:own={msg.senderId === $auth.user?.id} on:contextmenu={(e) => handleContextMenu(e, msg.id, msg.senderId)}>
-                 <div class="message-content">
-                   {msg.content}
-                 </div>
-                  <span class="msg-time" title={new Date(msg.timestamp * 1000).toLocaleString()}>
+                {#each group.messages as msg, i}
+                  <div class="message" class:own={msg.senderId === $auth.user?.id} data-message-id={msg.id} on:contextmenu={(e) => handleContextMenu(e, msg.id, msg.senderId)}>
+                  <div class="message-content">
+                    {msg.content}
+                  </div>
+                   <span class="msg-time" title={new Date(msg.timestamp * 1000).toLocaleString()}>
                     {new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     {#if msg.editedAt}
                       <span class="edited" title={new Date(msg.editedAt * 1000).toLocaleString()}>(изменено)</span>
@@ -642,6 +847,7 @@
         bind:value={newMessage} 
         placeholder="Введите сообщение..." 
         disabled={sending || !chatKey}
+        id="messageInput"
       />
       <button type="submit" disabled={sending || !newMessage.trim() || !chatKey}>
         {sending ? '...' : 'Отправить'}
@@ -781,6 +987,13 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+  }
+
+  .load-more-placeholder {
+    text-align: center;
+    padding: 16px;
+    color: #888;
+    cursor: pointer;
   }
 
   .message-group {

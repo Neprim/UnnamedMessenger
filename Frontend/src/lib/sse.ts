@@ -26,22 +26,18 @@ export function connectSSE() {
   
   eventSource = new EventSource(`/api/events?token=${token}`);
 
-  eventSource.onopen = () => {
-    console.log('SSE connected successfully');
-  };
-
   eventSource.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
       sseEvents.set(data);
       handleSSEEvent(data);
     } catch (e) {
-      console.error('Failed to parse SSE event:', e);
+      
     }
   };
 
   eventSource.onerror = (err) => {
-    console.error('SSE error:', err);
+    
     if (eventSource) {
       eventSource.close();
       eventSource = null;

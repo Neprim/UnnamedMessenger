@@ -3,7 +3,7 @@
   import { push } from 'svelte-spa-router';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
-  import { memberEvent, chatDeletedEvent } from '../lib/sse';
+  import { memberEvent, chatDeletedEvent, sseMessage } from '../lib/sse';
   import * as crypto from '../lib/crypto';
   import ChatView from './ChatView.svelte';
 
@@ -24,6 +24,7 @@
   let newChatType: 'pm' | 'gm' = 'gm';
   let creatingChat = false;
   let selectedChatId: string | null = null;
+  let selectedChatDetail: any = null;
 
   let userSearch = '';
   let searchResults: { id: string; username: string; publicKey: string }[] = [];
@@ -33,11 +34,7 @@
   export let params: { id?: string } = {};
 
   $: selectedChatId = params.id || null;
-
-  onDestroy(() => {
-    if (unsubscribeMemberEvent) unsubscribeMemberEvent();
-    if (unsubscribeChatDeleted) unsubscribeChatDeleted();
-  });
+  $: selectedChatDetail = selectedChatId ? $chats.find((c: any) => c.id === selectedChatId) : null;
 
   async function searchUsers() {
     if (!userSearch.trim()) {
@@ -61,6 +58,7 @@
 
   let unsubscribeMemberEvent: () => void;
   let unsubscribeChatDeleted: () => void;
+  let unsubscribeSSE: () => void;
 
   onMount(async () => {
     const checkAuth = setInterval(() => {
@@ -94,11 +92,78 @@
         chatDeletedEvent.set(null);
       }
     });
+    
+    // Handle new messages for unread count in other chats
+    let lastProcessedMessageId = '';
+    unsubscribeSSE = sseMessage.subscribe(async event => {
+      if (!event || !event.message || !event.chatId) {
+        sseMessage.set(null);
+        return;
+      }
+      
+      // Skip if message has no content (delete event) or has editedAt (edit event) - only count new messages
+      if (!event.message.content || event.message.editedAt) {
+        sseMessage.set(null);
+        return;
+      }
+      
+      // Prevent duplicate processing
+      if (event.message.id === lastProcessedMessageId) {
+        sseMessage.set(null);
+        return;
+      }
+      lastProcessedMessageId = event.message.id;
+      
+      const chat = $chats.find(c => c.id === event.chatId);
+      if (!chat) {
+        sseMessage.set(null);
+        return;
+      }
+      
+      // Skip if this chat is currently selected
+      if (event.chatId === selectedChatId) {
+        sseMessage.set(null);
+        return;
+      }
+      
+      // Skip own messages (they are already marked as read)
+      if (event.message.senderId === $auth.user?.id) {
+        sseMessage.set(null);
+        return;
+      }
+      
+      // Update lastMessage with decrypted preview if we have the chatKey
+      const chatKey = chat.chatKey;
+      let previewContent = 'Новое сообщение';
+      let senderUsername = '';
+      
+      if (chatKey) {
+        try {
+          const decryptedContent = await crypto.decryptMessage(chatKey, event.message.content);
+          previewContent = decryptedContent;
+        } catch (e) {
+          
+        }
+      }
+      
+      chats.updateChat(event.chatId, {
+        unreadCount: (chat.unreadCount || 0) + 1,
+        lastMessage: {
+          senderId: event.message.senderId,
+          content: previewContent,
+          senderUsername: senderUsername,
+          isSystem: false
+        }
+      });
+      
+      sseMessage.set(null);
+    });
   });
 
   onDestroy(() => {
     if (unsubscribeMemberEvent) unsubscribeMemberEvent();
     if (unsubscribeChatDeleted) unsubscribeChatDeleted();
+    if (unsubscribeSSE) unsubscribeSSE();
   });
 
   async function handleMemberEvent(event: { type: string; chatId: string; userId: string; memberCount: number; removed?: boolean; username?: string }) {
@@ -124,18 +189,32 @@
             chatKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
             chats.setChatKey(event.chatId, chatKey);
           } catch (e) {
-            console.error('Не удалось расшифровать ключ чата:', e);
+            
           }
         }
         
+        let chatMessages: any[] = [];
         if (chatKey) {
           try {
             const messagesResult = await api.chats.getMessages(event.chatId, 10);
             if (messagesResult.messages && messagesResult.messages.length > 0) {
-              const lastMsg = messagesResult.messages[messagesResult.messages.length - 1];
+              const memberMap = new Map(chatDetail.members.map((m: any) => [m.id, m.username]));
+              chatMessages = await Promise.all(
+                messagesResult.messages.map(async (msg) => {
+                  if (msg.senderId === null) return msg;
+                  const senderUsername = memberMap.get(msg.senderId) || 'Unknown';
+                  try {
+                    return { ...msg, content: await crypto.decryptMessage(chatKey!, msg.content), senderUsername };
+                  } catch {
+                    return { ...msg, content: '[Decryption failed]', senderUsername };
+                  }
+                })
+              );
+              
+              const lastMsg = chatMessages[chatMessages.length - 1];
               if (lastMsg.senderId === null) {
                 const parsed = JSON.parse(lastMsg.content || '{}');
-                const systemContent = parsed.event === 'personal_chat_created' ? 'Личный чат создан' : 
+                const systemContent = parsed.event === 'chat_created' ? 'Чат создан' : 
                                       parsed.event === 'member_added' ? `${parsed.username} добавлен в чат` :
                                       parsed.event === 'member_removed' ? `${parsed.username} удалён из чата` :
                                       parsed.event === 'member_left' ? `${parsed.username} покинул чат` : '';
@@ -145,27 +224,17 @@
                   isSystem: true
                 };
               } else {
-                try {
-                  const decrypted = await crypto.decryptMessage(chatKey, lastMsg.content);
-                  const sender = chatDetail.members.find((m: any) => m.id === lastMsg.senderId);
-                  lastMessage = {
-                    senderId: lastMsg.senderId,
-                    content: decrypted,
-                    senderUsername: sender?.username || 'Unknown',
-                    isSystem: false
-                  };
-                } catch {
-                  lastMessage = {
-                    senderId: lastMsg.senderId,
-                    content: '[Decryption failed]',
-                    senderUsername: 'Unknown',
-                    isSystem: false
-                  };
-                }
+                const sender = chatDetail.members.find((m: any) => m.id === lastMsg.senderId);
+                lastMessage = {
+                  senderId: lastMsg.senderId,
+                  content: lastMsg.content,
+                  senderUsername: sender?.username || 'Unknown',
+                  isSystem: false
+                };
               }
             }
           } catch (e) {
-            console.error('Не удалось загрузить последние сообщения:', e);
+            
           }
         }
         
@@ -174,9 +243,10 @@
           type: chatDetail.type, 
           name: chatDetail.name, 
           memberCount: event.memberCount,
-          members: chatDetail.members.map((m: any) => m.id),
+          members: chatDetail.members,
           otherUser,
-          lastMessage
+          lastMessage,
+          messages: chatMessages
         });
       } else if (exists) {
         chats.updateChat(event.chatId, { memberCount: event.memberCount });
@@ -217,9 +287,8 @@
         if (currentMember && $auth.privateKey) {
           try {
             chatKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
-            chats.setChatKey(chat.id, chatKey);
           } catch (e) {
-            console.error('Не удалось расшифровать ключ чата:', e);
+            
           }
         }
         
@@ -232,14 +301,31 @@
         }
         
         let lastMessage = null;
+        let chatMessages: any[] = [];
         if (chatKey) {
           try {
-            const messagesResult = await api.chats.getMessages(chat.id, 10);
-            if (messagesResult.messages && messagesResult.messages.length > 0) {
-              const lastMsg = messagesResult.messages[messagesResult.messages.length - 1];
+            const messagesResult = await api.chats.getMessages(chat.id, { limit: 10 });
+            chatMessages = messagesResult.messages || [];
+            
+            if (chatMessages.length > 0) {
+              // Decrypt messages and add senderUsername
+              const memberMap = new Map(chatDetail.members.map((m: any) => [m.id, m.username]));
+              chatMessages = await Promise.all(
+                chatMessages.map(async (msg) => {
+                  if (msg.senderId === null) return msg;
+                  const senderUsername = memberMap.get(msg.senderId) || 'Unknown';
+                  try {
+                    return { ...msg, content: await crypto.decryptMessage(chatKey!, msg.content), senderUsername };
+                  } catch {
+                    return { ...msg, content: '[Decryption failed]', senderUsername };
+                  }
+                })
+              );
+              
+              const lastMsg = chatMessages[chatMessages.length - 1];
               if (lastMsg.senderId === null) {
                 const parsed = JSON.parse(lastMsg.content || '{}');
-                const systemContent = parsed.event === 'personal_chat_created' ? 'Личный чат создан' : 
+                const systemContent = parsed.event === 'chat_created' ? 'Чат создан' : 
                                       parsed.event === 'member_added' ? `${parsed.username} добавлен в чат` :
                                       parsed.event === 'member_removed' ? `${parsed.username} удалён из чата` :
                                       parsed.event === 'member_left' ? `${parsed.username} покинул чат` : '';
@@ -249,27 +335,17 @@
                   isSystem: true
                 };
               } else {
-                try {
-                  const decrypted = await crypto.decryptMessage(chatKey, lastMsg.content);
-                  const sender = chatDetail.members.find((m: any) => m.id === lastMsg.senderId);
-                  lastMessage = {
-                    senderId: lastMsg.senderId,
-                    content: decrypted,
-                    senderUsername: sender?.username || 'Unknown',
-                    isSystem: false
-                  };
-                } catch {
-                  lastMessage = {
-                    senderId: lastMsg.senderId,
-                    content: '[Decryption failed]',
-                    senderUsername: 'Unknown',
-                    isSystem: false
-                  };
-                }
+                const sender = chatDetail.members.find((m: any) => m.id === lastMsg.senderId);
+                lastMessage = {
+                  senderId: lastMsg.senderId,
+                  content: lastMsg.content,
+                  senderUsername: sender?.username || 'Unknown',
+                  isSystem: false
+                };
               }
             }
             } catch (e) {
-            console.error('Не удалось загрузить последние сообщения:', e);
+            
           }
         }
         
@@ -278,15 +354,19 @@
         type: chat.type,
         name: chat.name,
         memberCount: chat.memberCount,
-        members: chatDetail.members.map((m: any) => m.id),
+        members: chatDetail.members,
         otherUser,
-        lastMessage
+        lastMessage,
+        unreadCount: chat.unreadCount || 0,
+        firstUnreadId: chat.firstUnreadId || null,
+        messages: chatMessages,
+        chatKey
       });
     }
     
     chats.set(loadedChats);
   } catch (e) {
-      console.error('Не удалось загрузить чаты:', e);
+      
     } finally {
       loading = false;
     }
@@ -344,7 +424,7 @@
       selectedUserId = null;
       push(`/chats/${result.id}`);
     } catch (e) {
-      console.error('Не удалось создать чат:', e);
+      
     } finally {
       creatingChat = false;
     }
@@ -365,7 +445,7 @@
       showUsernameModal = false;
       newUsername = '';
     } catch (e) {
-      console.error('Не удалось обновить имя пользователя:', e);
+      
     } finally {
       updatingUsername = false;
     }
@@ -391,7 +471,7 @@
       showExportKeyModal = false;
       exportConfirmChecked = false;
     } catch (e) {
-      console.error('Не удалось экспортировать закрытый ключ:', e);
+      
     } finally {
       exportingKey = false;
     }
@@ -421,7 +501,7 @@
       newPasswordConfirm = '';
       alert('Пароль изменён. На других устройствах потребуется повторный вход с новым паролем.');
     } catch (e) {
-      console.error('Не удалось изменить пароль:', e);
+      
       alert('Не удалось изменить пароль');
     } finally {
       changingPassword = false;
@@ -456,13 +536,18 @@
           >
             <div class="chat-icon">{chat.type === 'gm' ? 'G' : 'P'}</div>
             <div class="chat-info">
-              <div class="chat-name">{chat.type === 'pm' ? (chat.otherUser?.username || 'Личный чат') : (chat.name || 'Групповой чат')}</div>
+              <div class="chat-name">
+                {chat.type === 'pm' ? (chat.otherUser?.username || 'Личный чат') : (chat.name || 'Групповой чат')}
+                {#if chat.unreadCount && chat.unreadCount > 0}
+                  <span class="unread-badge">{chat.unreadCount}</span>
+                {/if}
+              </div>
               <div class="chat-meta">
                 {#if chat.lastMessage}
                   {#if chat.lastMessage.isSystem}
                     <span class="last-message-system">{chat.lastMessage.content}</span>
                   {:else}
-                    <span class="last-message">{chat.lastMessage.senderUsername}: {chat.lastMessage.content}</span>
+                    <span class="last-message">{chat.lastMessage.senderUsername ? chat.lastMessage.senderUsername + ': ' : ''}{chat.lastMessage.content}</span>
                   {/if}
                 {:else}
                   {chat.memberCount} участников
@@ -477,7 +562,7 @@
 
   <main class="main">
     {#if selectedChatId}
-      <ChatView params={{ id: selectedChatId }} />
+      <ChatView params={{ id: selectedChatId }} chatDetail={selectedChatDetail} />
     {:else}
       <div class="no-chat">
         <p>Выберите чат, чтобы начать общение</p>
@@ -776,6 +861,20 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .unread-badge {
+    background: #f44336;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 10px;
+    min-width: 18px;
+    text-align: center;
   }
 
   .chat-meta {
