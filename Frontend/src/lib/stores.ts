@@ -131,7 +131,6 @@ export interface Chat {
     username: string;
   } | null;
   unreadCount?: number;
-  firstUnreadId?: string | null;
 }
 
 function createChatsStore() {
@@ -155,7 +154,7 @@ function createChatsStore() {
       update(chats => chats.map(c => c.id === chatId ? { ...c, unreadCount: (c.unreadCount || 0) + 1 } : c));
     },
     clearUnread: (chatId: string) => {
-      update(chats => chats.map(c => c.id === chatId ? { ...c, unreadCount: 0, firstUnreadId: null } : c));
+      update(chats => chats.map(c => c.id === chatId ? { ...c, unreadCount: 0 } : c));
     },
     addMessages: (chatId: string, newMessages: any[], prepend = false) => {
       update(chats => chats.map(c => {

@@ -358,7 +358,6 @@
         otherUser,
         lastMessage,
         unreadCount: chat.unreadCount || 0,
-        firstUnreadId: chat.firstUnreadId || null,
         messages: chatMessages,
         chatKey
       });

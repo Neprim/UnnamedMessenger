@@ -5,8 +5,8 @@
   import { auth, chats, type Chat } from '../lib/stores';
   import { sseMessage } from '../lib/sse';
 
-  const INITIAL_LOAD_COUNT = 10;
-  const LOAD_MORE_COUNT = 20;
+  const INITIAL_LOAD_COUNT = 20;
+  const LOAD_MORE_COUNT = 50;
 
   export let params: { id: string };
   export let chatDetail: any = null;
@@ -201,45 +201,6 @@
   function cancelEdit() {
     editingMessage = null;
     editingText = '';
-  }
-
-  async function loadOlderMessages() {
-    if (loadingMoreBefore || !hasMoreBefore) return;
-    const oldestMsg = messages[0];
-    if (!oldestMsg) return;
-    
-    // Если chatKey не инициализирован, получить из store
-    if (!chatKey) {
-      const chatFromStore = $chats.find((c: any) => c.id === params.id);
-      chatKey = chatFromStore?.chatKey || null;
-    }
-    
-    loadingMoreBefore = true;
-    try {
-      const result = await api.chats.getMessages(params.id, { cursor: oldestMsg.id, beforeCnt: 50 });
-      hasMoreBefore = result.hasMoreBefore;
-      
-      if (result.messages.length > 0 && chatKey) {
-        const memberMap = new Map(chatDetail?.members?.map((m: any) => [m.id, m.username]) || []);
-        const decrypted = await Promise.all(
-          result.messages.map(async (msg: any) => {
-            const isSystem = msg.senderId === null || msg.senderId === undefined || msg.senderId === 'null';
-            if (isSystem) return msg;
-            const senderUsername = memberMap.get(msg.senderId) || 'Unknown';
-            try {
-              return { ...msg, content: await crypto.decryptMessage(chatKey!, msg.content), senderUsername };
-            } catch {
-              return { ...msg, content: '[Decryption failed]', senderUsername };
-            }
-          })
-        );
-        messages = [...decrypted, ...messages];
-      }
-    } catch (e) {
-      
-    } finally {
-      loadingMoreBefore = false;
-    }
   }
 
   async function loadMoreMessages() {
@@ -466,7 +427,6 @@
       const parsed = JSON.parse(message.content || '{}');
       messages = [...messages, message];
       chats.addMessages(params.id, [message], false);
-      chatDetail = await api.chats.get(params.id);
       
       const systemContent = getSystemMessageContent(parsed.event, parsed);
       
