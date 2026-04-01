@@ -8,7 +8,6 @@
 
   const dispatch = createEventDispatcher<{
     create: void;
-    logout: void;
     settings: void;
   }>();
 </script>
@@ -16,12 +15,11 @@
 <aside class="sidebar">
   <header>
     <div class="header-left">
-      <button class="icon-btn" type="button" on:click={() => dispatch('settings')} title="Настройки">⚙️</button>
+      <button class="icon-btn" type="button" on:click={() => dispatch('settings')} title="Настройки">⚙</button>
       <h2>Чаты</h2>
     </div>
     <div class="header-actions">
       <button class="icon-btn" type="button" on:click={() => dispatch('create')} title="Новый чат">+</button>
-      <button class="icon-btn logout" type="button" on:click={() => dispatch('logout')} title="Выход">↪</button>
     </div>
   </header>
 
@@ -110,10 +108,6 @@
 
   .icon-btn:hover {
     background: #e0e0e0;
-  }
-
-  .logout {
-    color: #f44336;
   }
 
   .chat-list {

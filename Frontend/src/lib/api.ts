@@ -85,6 +85,9 @@ export const api = {
     
     update: (data: { username: string }) => 
       request<UserResponse>('/users/me', { method: 'PATCH', body: JSON.stringify(data) }),
+
+    deleteMe: () =>
+      request<{ success: boolean }>('/users/me', { method: 'DELETE' }),
     
     search: (query: string) => 
       request<SearchUserResult[]>('/users/search?q=' + encodeURIComponent(query))

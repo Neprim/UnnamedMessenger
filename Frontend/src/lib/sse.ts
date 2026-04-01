@@ -2,7 +2,7 @@ import { writable } from 'svelte/store';
 import type { Message } from './types';
 
 export interface SSEEvent {
-  type: 'new_message' | 'message_deleted' | 'message_edited' | 'member_added' | 'member_removed' | 'member_left' | 'chat_deleted' | 'typing';
+  type: 'new_message' | 'message_deleted' | 'message_edited' | 'member_added' | 'member_removed' | 'member_left' | 'chat_deleted' | 'typing' | 'chat_updated';
   data: any;
 }
 
@@ -13,6 +13,7 @@ export const sseMessage = writable<{ chatId: string; message: Message } | null>(
 export const memberEvent = writable<{ type: string; chatId: string; userId: string; memberCount: number; removed?: boolean } | null>(null);
 
 export const chatDeletedEvent = writable<string | null>(null);
+export const chatUpdatedEvent = writable<string | null>(null);
 export const typingEvent = writable<{ chatId: string; userId: string } | null>(null);
 
 let eventSource: EventSource | null = null;
@@ -90,6 +91,10 @@ function handleSSEEvent(event: SSEEvent) {
     }
     case 'chat_deleted': {
       chatDeletedEvent.set(event.data.chatId);
+      break;
+    }
+    case 'chat_updated': {
+      chatUpdatedEvent.set(event.data.chatId);
       break;
     }
     case 'typing': {

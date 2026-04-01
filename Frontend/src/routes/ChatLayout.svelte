@@ -3,7 +3,7 @@
   import { push } from 'svelte-spa-router';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
-  import { chatDeletedEvent, memberEvent, sseMessage, typingEvent } from '../lib/sse';
+  import { chatDeletedEvent, chatUpdatedEvent, memberEvent, sseMessage, typingEvent } from '../lib/sse';
   import * as crypto from '../lib/crypto';
   import ChatSidebar from '../components/chat/ChatSidebar.svelte';
   import CreateChatModal from '../components/chat/CreateChatModal.svelte';
@@ -18,6 +18,7 @@
   let showUsernameModal = false;
   let showExportKeyModal = false;
   let showPasswordModal = false;
+  let showDeleteAccountModal = false;
   let exportConfirmChecked = false;
   let exportingKey = false;
   let newUsername = '';
@@ -25,6 +26,8 @@
   let newPassword = '';
   let newPasswordConfirm = '';
   let changingPassword = false;
+  let deletingAccount = false;
+  let deleteAccountConfirmation = '';
   let newChatName = '';
   let newChatType: 'pm' | 'gm' = 'gm';
   let creatingChat = false;
@@ -40,6 +43,7 @@
   let unsubscribeChatDeleted: (() => void) | undefined;
   let unsubscribeSSE: (() => void) | undefined;
   let unsubscribeTypingEvent: (() => void) | undefined;
+  let unsubscribeChatUpdated: (() => void) | undefined;
   let previousSelectedChatId: string | null = null;
 
   $: selectedChatId = params.id ?? null;
@@ -99,7 +103,6 @@
       showCreateModal = false;
       resetCreateState();
       push(`/chats/${chat.id}`);
-    } catch {
     } finally {
       creatingChat = false;
     }
@@ -110,6 +113,23 @@
     auth.logout();
     chats.clear();
     push('/login');
+  }
+
+  async function handleDeleteAccount() {
+    if (deletingAccount || deleteAccountConfirmation !== 'Точно удалить') return;
+
+    deletingAccount = true;
+    try {
+      await api.users.deleteMe();
+      localStorage.removeItem('encryptedPrivateKey');
+      auth.logout();
+      chats.clear();
+      showDeleteAccountModal = false;
+      deleteAccountConfirmation = '';
+      push('/register');
+    } finally {
+      deletingAccount = false;
+    }
   }
 
   async function handleUpdateUsername() {
@@ -230,6 +250,13 @@
       chats.handleTypingEvent(event.chatId, event.userId);
       typingEvent.set(null);
     });
+
+    unsubscribeChatUpdated = chatUpdatedEvent.subscribe((chatId) => {
+      if (!chatId) return;
+      chats.refreshChat(chatId).finally(() => {
+        chatUpdatedEvent.set(null);
+      });
+    });
   });
 
   onDestroy(() => {
@@ -237,18 +264,12 @@
     unsubscribeChatDeleted?.();
     unsubscribeSSE?.();
     unsubscribeTypingEvent?.();
+    unsubscribeChatUpdated?.();
   });
 </script>
 
 <div class="layout">
-  <ChatSidebar
-    chats={$chats}
-    {loading}
-    {selectedChatId}
-    on:create={() => (showCreateModal = true)}
-    on:logout={handleLogout}
-    on:settings={() => (showSettingsModal = true)}
-  />
+  <ChatSidebar chats={$chats} {loading} {selectedChatId} on:create={() => (showCreateModal = true)} on:settings={() => (showSettingsModal = true)} />
 
   <main class="main">
     {#if selectedChatId}
@@ -293,10 +314,33 @@
         <button class="settings-btn" disabled>Изменить аватар</button>
         <button class="settings-btn" on:click={() => { showPasswordModal = true; showSettingsModal = false; }}>Изменить пароль</button>
         <button class="settings-btn" on:click={() => { showExportKeyModal = true; showSettingsModal = false; }}>Экспорт приватного ключа</button>
-        <button class="settings-btn danger" disabled>Удалить аккаунт</button>
+        <button class="settings-btn" on:click={handleLogout}>Выйти из аккаунта</button>
+        <button class="settings-btn danger" on:click={() => { showDeleteAccountModal = true; showSettingsModal = false; }}>Удалить аккаунт</button>
       </div>
       <div class="modal-actions">
         <button on:click={() => (showSettingsModal = false)}>Закрыть</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showDeleteAccountModal}
+  <div class="modal-shell">
+    <button class="modal-overlay" type="button" on:click={() => (showDeleteAccountModal = false)} aria-label="Закрыть окно"></button>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-account-title">
+      <h3 id="delete-account-title">Удалить аккаунт</h3>
+      <div class="warning-box danger-box">
+        Это действие необратимо. Будут удалены ваши сообщения, личные чаты и локальные ключи на этом устройстве.
+      </div>
+      <div class="field">
+        <label for="deleteAccountConfirm">Введите фразу "Точно удалить"</label>
+        <input id="deleteAccountConfirm" type="text" bind:value={deleteAccountConfirmation} placeholder="Точно удалить" />
+      </div>
+      <div class="modal-actions">
+        <button on:click={() => { showDeleteAccountModal = false; deleteAccountConfirmation = ''; }}>Отмена</button>
+        <button class="danger-action" on:click={handleDeleteAccount} disabled={deletingAccount || deleteAccountConfirmation !== 'Точно удалить'}>
+          {deletingAccount ? 'Удаление...' : 'Удалить аккаунт'}
+        </button>
       </div>
     </div>
   </div>
@@ -513,6 +557,12 @@
     margin-bottom: 16px;
   }
 
+  .danger-box {
+    background: #fdecea;
+    border-color: #ef9a9a;
+    color: #b71c1c;
+  }
+
   .modal-desc {
     font-size: 14px;
     color: #666;
@@ -534,5 +584,10 @@
     font-size: 14px;
     margin-top: -10px;
     margin-bottom: 10px;
+  }
+
+  .danger-action {
+    background: #d32f2f;
+    color: white;
   }
 </style>
