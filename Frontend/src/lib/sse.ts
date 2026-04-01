@@ -1,8 +1,8 @@
 import { writable } from 'svelte/store';
-import type { Message } from './api';
+import type { Message } from './types';
 
 export interface SSEEvent {
-  type: 'new_message' | 'message_deleted' | 'message_edited' | 'member_added' | 'member_removed' | 'member_left' | 'chat_deleted';
+  type: 'new_message' | 'message_deleted' | 'message_edited' | 'member_added' | 'member_removed' | 'member_left' | 'chat_deleted' | 'typing';
   data: any;
 }
 
@@ -13,6 +13,7 @@ export const sseMessage = writable<{ chatId: string; message: Message } | null>(
 export const memberEvent = writable<{ type: string; chatId: string; userId: string; memberCount: number; removed?: boolean } | null>(null);
 
 export const chatDeletedEvent = writable<string | null>(null);
+export const typingEvent = writable<{ chatId: string; userId: string } | null>(null);
 
 let eventSource: EventSource | null = null;
 
@@ -57,7 +58,9 @@ function handleSSEEvent(event: SSEEvent) {
   switch (event.type) {
     case 'new_message': {
       const message: Message = event.data;
-      sseMessage.set({ chatId: message.chatId, message });
+      if (message.chatId) {
+        sseMessage.set({ chatId: message.chatId, message });
+      }
       break;
     }
     case 'message_deleted': {
@@ -66,7 +69,9 @@ function handleSSEEvent(event: SSEEvent) {
     }
     case 'message_edited': {
       const message: Message = event.data;
-      sseMessage.set({ chatId: message.chatId, message });
+      if (message.chatId) {
+        sseMessage.set({ chatId: message.chatId, message });
+      }
       break;
     }
     case 'member_added':
@@ -85,6 +90,14 @@ function handleSSEEvent(event: SSEEvent) {
     }
     case 'chat_deleted': {
       chatDeletedEvent.set(event.data.chatId);
+      break;
+    }
+    case 'typing': {
+      const data = event.data;
+      typingEvent.set({
+        chatId: data.chatId,
+        userId: data.userId
+      });
       break;
     }
   }

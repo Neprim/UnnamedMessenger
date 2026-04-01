@@ -3,6 +3,10 @@ const ALGORITHM_AES = 'AES-GCM';
 const KEY_LENGTH = 2048;
 const AES_KEY_LENGTH = 256;
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
 export async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const keyMaterial = await window.crypto.subtle.importKey(
@@ -16,7 +20,7 @@ export async function deriveKey(password: string, salt: Uint8Array): Promise<Cry
   return window.crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt,
+      salt: toArrayBuffer(salt),
       iterations: 100000,
       hash: 'SHA-256'
     },
@@ -103,7 +107,7 @@ export async function encryptWithPublicKey(publicKey: CryptoKey, data: Uint8Arra
   const encrypted = await window.crypto.subtle.encrypt(
     { name: ALGORITHM_RSA },
     publicKey,
-    data
+    toArrayBuffer(data)
   );
   return btoa(String.fromCharCode(...new Uint8Array(encrypted)));
 }
@@ -196,7 +200,7 @@ export async function decryptMessage(chatKey: CryptoKey, encryptedData: string):
     encrypted
   );
 
-  return extractMessage(decrypted);
+  return extractMessage(new Uint8Array(decrypted));
 }
 
 export async function encryptChatKeyWithPublicKey(chatKey: CryptoKey, publicKey: CryptoKey): Promise<string> {
@@ -209,7 +213,7 @@ export async function decryptChatKeyWithPrivateKey(encryptedKey: string, private
   const keyBytes = await decryptWithPrivateKey(privateKey, encryptedKey);
   return window.crypto.subtle.importKey(
     'raw',
-    keyBytes,
+    toArrayBuffer(keyBytes),
     { name: ALGORITHM_AES, length: AES_KEY_LENGTH },
     true,
     ['encrypt', 'decrypt']

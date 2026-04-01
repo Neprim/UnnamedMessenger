@@ -42,7 +42,7 @@ function broadcastToChatMembers(chatId, eventType, data, excludeUserId = null) {
 router.get('/', authenticate, (req, res) => {
   try {
     const chats = db.prepare(`
-      SELECT c.id, c.type, c.name, c.created_at,
+      SELECT c.id, c.type, c.name, c.created_by, c.created_at,
         (SELECT COUNT(*) FROM chat_members WHERE chat_id = c.id) as member_count,
         cm.last_read_at
       FROM chats c
@@ -72,6 +72,8 @@ router.get('/', authenticate, (req, res) => {
         id: chat.id,
         type: chat.type,
         name: chat.name,
+        createdBy: chat.created_by,
+        createdAt: chat.created_at,
         memberCount: chat.member_count,
         unreadCount,
         firstUnreadId
@@ -87,7 +89,7 @@ router.get('/', authenticate, (req, res) => {
 
 router.post('/', authenticate, (req, res) => {
   try {
-    const { type, name, members, encryptedKey, memberKeys } = req.body;
+    let { type, name, members, encryptedKey, memberKeys } = req.body;
     
     if (!type || !['pm', 'gm'].includes(type)) {
       return res.status(400).json({ error: 'Invalid chat type' });
@@ -153,7 +155,25 @@ router.post('/', authenticate, (req, res) => {
     
     createSystemMessage(chatId, 'chat_created', {});
     
-    res.status(201).json({ id: chatId, type, name });
+    members = db.prepare(`
+      SELECT u.id, u.username, cm.encrypted_chat_key
+      FROM chat_members cm
+      JOIN users u ON cm.user_id = u.id
+      WHERE cm.chat_id = ?
+    `).all(chatId);
+    
+    res.status(201).json({
+      id: chatId,
+      type,
+      name,
+      createdBy: req.userId,
+      createdAt: Math.floor(Date.now() / 1000),
+      members: members.map(m => ({
+        id: m.id,
+        username: m.username,
+        encryptedKey: m.encrypted_chat_key
+      }))
+    });
   } catch (err) {
     console.error('Create chat error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -503,6 +523,35 @@ router.get('/:chatId/messages', authenticate, (req, res) => {
     });
   } catch (err) {
     console.error('Get messages error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/:chatId/typing', authenticate, (req, res) => {
+  try {
+    const chat = db.prepare('SELECT id FROM chats WHERE id = ?').get(req.params.chatId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    const isMember = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(req.params.chatId, req.userId);
+    if (!isMember) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    broadcastToChatMembers(
+      req.params.chatId,
+      'typing',
+      {
+        chatId: req.params.chatId,
+        userId: req.userId
+      },
+      req.userId
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Typing event error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

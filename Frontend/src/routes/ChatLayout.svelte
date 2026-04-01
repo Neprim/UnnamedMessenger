@@ -1,11 +1,16 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { push } from 'svelte-spa-router';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
-  import { memberEvent, chatDeletedEvent, sseMessage } from '../lib/sse';
+  import { chatDeletedEvent, memberEvent, sseMessage, typingEvent } from '../lib/sse';
   import * as crypto from '../lib/crypto';
+  import ChatSidebar from '../components/chat/ChatSidebar.svelte';
+  import CreateChatModal from '../components/chat/CreateChatModal.svelte';
   import ChatView from './ChatView.svelte';
+  import type { SearchUserResult } from '../lib/types';
+
+  export let params: { id?: string } = {};
 
   let loading = true;
   let showCreateModal = false;
@@ -24,348 +29,55 @@
   let newChatType: 'pm' | 'gm' = 'gm';
   let creatingChat = false;
   let selectedChatId: string | null = null;
-  let selectedChatDetail: any = null;
+  let selectedChatDetail: Chat | null = null;
 
   let userSearch = '';
-  let searchResults: { id: string; username: string; publicKey: string }[] = [];
+  let searchResults: SearchUserResult[] = [];
   let searching = false;
   let selectedUserId: string | null = null;
 
-  export let params: { id?: string } = {};
+  let unsubscribeMemberEvent: (() => void) | undefined;
+  let unsubscribeChatDeleted: (() => void) | undefined;
+  let unsubscribeSSE: (() => void) | undefined;
+  let unsubscribeTypingEvent: (() => void) | undefined;
+  let previousSelectedChatId: string | null = null;
 
-  $: selectedChatId = params.id || null;
-  $: selectedChatDetail = selectedChatId ? $chats.find((c: any) => c.id === selectedChatId) : null;
+  $: selectedChatId = params.id ?? null;
+  $: selectedChatDetail = selectedChatId ? $chats.find((chat) => chat.id === selectedChatId) ?? null : null;
+  $: if (previousSelectedChatId !== selectedChatId) {
+    if (previousSelectedChatId) {
+      chats.finalizeClosedChat(previousSelectedChatId);
+    }
+    previousSelectedChatId = selectedChatId;
+  }
+
+  function resetCreateState() {
+    newChatName = '';
+    userSearch = '';
+    selectedUserId = null;
+  }
 
   async function searchUsers() {
     if (!userSearch.trim()) {
       searchResults = [];
       return;
     }
+
     searching = true;
     try {
       const results = await api.users.search(userSearch);
-      searchResults = results.filter(u => u.id !== $auth.user?.id);
-    } catch (e) {
+      searchResults = results.filter((user) => user.id !== $auth.user?.id);
+    } catch {
       searchResults = [];
     } finally {
       searching = false;
     }
   }
 
-  function isUserInPersonalChat(userId: string): boolean {
-    return $chats.some(c => c.type === 'pm' && c.members?.includes(userId));
-  }
-
-  let unsubscribeMemberEvent: () => void;
-  let unsubscribeChatDeleted: () => void;
-  let unsubscribeSSE: () => void;
-
-  onMount(async () => {
-    const checkAuth = setInterval(() => {
-      if (!$auth.isLoading) {
-        clearInterval(checkAuth);
-        loadChats();
-      }
-    }, 50);
-
-    setTimeout(() => {
-      clearInterval(checkAuth);
-      loadChats();
-    }, 5000);
-
-    unsubscribeMemberEvent = memberEvent.subscribe(event => {
-      if (event) {
-        handleMemberEvent(event);
-        memberEvent.set(null);
-      }
-    });
-
-    unsubscribeChatDeleted = chatDeletedEvent.subscribe(chatId => {
-      if (chatId) {
-        const exists = $chats.find(c => c.id === chatId);
-        if (exists) {
-          chats.removeChat(chatId);
-          if (selectedChatId === chatId) {
-            push('/chats');
-          }
-        }
-        chatDeletedEvent.set(null);
-      }
-    });
-    
-    // Handle new messages for unread count in other chats
-    let lastProcessedMessageId = '';
-    unsubscribeSSE = sseMessage.subscribe(async event => {
-      if (!event || !event.message || !event.chatId) {
-        sseMessage.set(null);
-        return;
-      }
-      
-      // Skip if message has no content (delete event) or has editedAt (edit event) - only count new messages
-      if (!event.message.content || event.message.editedAt) {
-        sseMessage.set(null);
-        return;
-      }
-      
-      // Prevent duplicate processing
-      if (event.message.id === lastProcessedMessageId) {
-        sseMessage.set(null);
-        return;
-      }
-      lastProcessedMessageId = event.message.id;
-      
-      const chat = $chats.find(c => c.id === event.chatId);
-      if (!chat) {
-        sseMessage.set(null);
-        return;
-      }
-      
-      // Skip if this chat is currently selected
-      if (event.chatId === selectedChatId) {
-        sseMessage.set(null);
-        return;
-      }
-      
-      // Skip own messages (they are already marked as read)
-      if (event.message.senderId === $auth.user?.id) {
-        sseMessage.set(null);
-        return;
-      }
-      
-      // Update lastMessage with decrypted preview if we have the chatKey
-      const chatKey = chat.chatKey;
-      let previewContent = 'Новое сообщение';
-      let senderUsername = '';
-      
-      if (chatKey) {
-        try {
-          const decryptedContent = await crypto.decryptMessage(chatKey, event.message.content);
-          previewContent = decryptedContent;
-        } catch (e) {
-          
-        }
-      }
-      
-      chats.updateChat(event.chatId, {
-        unreadCount: (chat.unreadCount || 0) + 1,
-        lastMessage: {
-          senderId: event.message.senderId,
-          content: previewContent,
-          senderUsername: senderUsername,
-          isSystem: false
-        }
-      });
-      
-      sseMessage.set(null);
-    });
-  });
-
-  onDestroy(() => {
-    if (unsubscribeMemberEvent) unsubscribeMemberEvent();
-    if (unsubscribeChatDeleted) unsubscribeChatDeleted();
-    if (unsubscribeSSE) unsubscribeSSE();
-  });
-
-  async function handleMemberEvent(event: { type: string; chatId: string; userId: string; memberCount: number; removed?: boolean; username?: string }) {
-    if (event.type === 'member_added') {
-      const exists = $chats.find(c => c.id === event.chatId);
-      if (!exists && $auth.user?.id === event.userId) {
-        const chatDetail = await api.chats.get(event.chatId);
-        const currentMember = chatDetail.members.find((m: any) => m.id === $auth.user?.id);
-        
-        let otherUser = null;
-        if (chatDetail.type === 'pm') {
-          const otherMember = chatDetail.members.find((m: any) => m.id !== $auth.user?.id);
-          if (otherMember) {
-            otherUser = { id: otherMember.id, username: otherMember.username };
-          }
-        }
-        
-        let chatKey: CryptoKey | null = null;
-        let lastMessage = null;
-        
-        if (currentMember && $auth.privateKey) {
-          try {
-            chatKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
-            chats.setChatKey(event.chatId, chatKey);
-          } catch (e) {
-            
-          }
-        }
-        
-        let chatMessages: any[] = [];
-        if (chatKey) {
-          try {
-            const messagesResult = await api.chats.getMessages(event.chatId, 10);
-            if (messagesResult.messages && messagesResult.messages.length > 0) {
-              const memberMap = new Map(chatDetail.members.map((m: any) => [m.id, m.username]));
-              chatMessages = await Promise.all(
-                messagesResult.messages.map(async (msg) => {
-                  if (msg.senderId === null) return msg;
-                  const senderUsername = memberMap.get(msg.senderId) || 'Unknown';
-                  try {
-                    return { ...msg, content: await crypto.decryptMessage(chatKey!, msg.content), senderUsername };
-                  } catch {
-                    return { ...msg, content: '[Decryption failed]', senderUsername };
-                  }
-                })
-              );
-              
-              const lastMsg = chatMessages[chatMessages.length - 1];
-              if (lastMsg.senderId === null) {
-                const parsed = JSON.parse(lastMsg.content || '{}');
-                const systemContent = parsed.event === 'chat_created' ? 'Чат создан' : 
-                                      parsed.event === 'member_added' ? `${parsed.username} добавлен в чат` :
-                                      parsed.event === 'member_removed' ? `${parsed.username} удалён из чата` :
-                                      parsed.event === 'member_left' ? `${parsed.username} покинул чат` : '';
-                lastMessage = {
-                  senderId: null,
-                  content: systemContent,
-                  isSystem: true
-                };
-              } else {
-                const sender = chatDetail.members.find((m: any) => m.id === lastMsg.senderId);
-                lastMessage = {
-                  senderId: lastMsg.senderId,
-                  content: lastMsg.content,
-                  senderUsername: sender?.username || 'Unknown',
-                  isSystem: false
-                };
-              }
-            }
-          } catch (e) {
-            
-          }
-        }
-        
-        chats.addChat({
-          id: chatDetail.id, 
-          type: chatDetail.type, 
-          name: chatDetail.name, 
-          memberCount: event.memberCount,
-          members: chatDetail.members,
-          otherUser,
-          lastMessage,
-          messages: chatMessages
-        });
-      } else if (exists) {
-        chats.updateChat(event.chatId, { memberCount: event.memberCount });
-      }
-    } else if (event.type === 'member_removed' || event.type === 'member_left') {
-      const removedUser = event.username || 'Пользователь';
-      const systemContent = event.type === 'member_removed' ? `${removedUser} удалён из чата` : `${removedUser} покинул чат`;
-      
-      if ($auth.user?.id === event.userId || event.removed) {
-        chats.removeChat(event.chatId);
-        if (selectedChatId === event.chatId) {
-          push('/chats');
-        }
-      } else {
-        chats.updateChat(event.chatId, { 
-          memberCount: event.memberCount,
-          lastMessage: {
-            senderId: null,
-            content: systemContent,
-            isSystem: true
-          }
-        });
-      }
-    }
-  }
-
   async function loadChats() {
     loading = true;
     try {
-      const apiChats = await api.chats.list();
-      const loadedChats: any[] = [];
-      
-      for (const chat of apiChats) {
-        const chatDetail = await api.chats.get(chat.id);
-        const currentMember = chatDetail.members.find((m: any) => m.id === $auth.user?.id);
-        
-        let chatKey: CryptoKey | null = null;
-        if (currentMember && $auth.privateKey) {
-          try {
-            chatKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
-          } catch (e) {
-            
-          }
-        }
-        
-        let otherUser = null;
-        if (chatDetail.type === 'pm') {
-          const otherMember = chatDetail.members.find((m: any) => m.id !== $auth.user?.id);
-          if (otherMember) {
-            otherUser = { id: otherMember.id, username: otherMember.username };
-          }
-        }
-        
-        let lastMessage = null;
-        let chatMessages: any[] = [];
-        if (chatKey) {
-          try {
-            const messagesResult = await api.chats.getMessages(chat.id, { limit: 10 });
-            chatMessages = messagesResult.messages || [];
-            
-            if (chatMessages.length > 0) {
-              // Decrypt messages and add senderUsername
-              const memberMap = new Map(chatDetail.members.map((m: any) => [m.id, m.username]));
-              chatMessages = await Promise.all(
-                chatMessages.map(async (msg) => {
-                  if (msg.senderId === null) return msg;
-                  const senderUsername = memberMap.get(msg.senderId) || 'Unknown';
-                  try {
-                    return { ...msg, content: await crypto.decryptMessage(chatKey!, msg.content), senderUsername };
-                  } catch {
-                    return { ...msg, content: '[Decryption failed]', senderUsername };
-                  }
-                })
-              );
-              
-              const lastMsg = chatMessages[chatMessages.length - 1];
-              if (lastMsg.senderId === null) {
-                const parsed = JSON.parse(lastMsg.content || '{}');
-                const systemContent = parsed.event === 'chat_created' ? 'Чат создан' : 
-                                      parsed.event === 'member_added' ? `${parsed.username} добавлен в чат` :
-                                      parsed.event === 'member_removed' ? `${parsed.username} удалён из чата` :
-                                      parsed.event === 'member_left' ? `${parsed.username} покинул чат` : '';
-                lastMessage = {
-                  senderId: null,
-                  content: systemContent,
-                  isSystem: true
-                };
-              } else {
-                const sender = chatDetail.members.find((m: any) => m.id === lastMsg.senderId);
-                lastMessage = {
-                  senderId: lastMsg.senderId,
-                  content: lastMsg.content,
-                  senderUsername: sender?.username || 'Unknown',
-                  isSystem: false
-                };
-              }
-            }
-            } catch (e) {
-            
-          }
-        }
-        
-      loadedChats.push({
-        id: chat.id,
-        type: chat.type,
-        name: chat.name,
-        memberCount: chat.memberCount,
-        members: chatDetail.members,
-        otherUser,
-        lastMessage,
-        unreadCount: chat.unreadCount || 0,
-        messages: chatMessages,
-        chatKey
-      });
-    }
-    
-    chats.set(loadedChats);
-  } catch (e) {
-      
+      await chats.loadChats();
     } finally {
       loading = false;
     }
@@ -373,57 +85,21 @@
 
   async function handleCreateChat() {
     if (creatingChat) return;
+
     creatingChat = true;
-
     try {
-      const chatKey = await crypto.generateChatKey();
-      const exportedChatKey = await crypto.exportChatKey(chatKey);
-      
-      const publicKey = await crypto.importPublicKey($auth.user!.publicKey);
-      const encryptedKey = await crypto.encryptChatKeyWithPublicKey(chatKey, publicKey);
-
-      let memberKeys: { [userId: string]: string } = {};
-      if (newChatType === 'pm' && selectedUserId) {
-        const otherUserPublicKey = searchResults.find(u => u.id === selectedUserId)?.publicKey;
-        if (otherUserPublicKey) {
-          const otherPublicKey = await crypto.importPublicKey(otherUserPublicKey);
-          memberKeys[selectedUserId] = await crypto.encryptChatKeyWithPublicKey(chatKey, otherPublicKey);
-        }
-      }
-
-      const members = newChatType === 'pm' ? [selectedUserId!] : [];
-
-      const result = await api.chats.create({
+      const selectedUser = searchResults.find((user) => user.id === selectedUserId);
+      const chat = await chats.createChat({
         type: newChatType,
         name: newChatType === 'gm' ? newChatName : undefined,
-        encryptedKey,
-        memberKeys,
-        members
+        selectedUserId,
+        selectedUserPublicKey: selectedUser?.publicKey
       });
 
-      const chatDetail = await api.chats.get(result.id);
-      const currentMember = chatDetail.members.find((m: any) => m.id === $auth.user?.id);
-      if (currentMember && $auth.privateKey) {
-        const decryptedKey = await crypto.decryptChatKeyWithPrivateKey(currentMember.encryptedKey, $auth.privateKey);
-        chats.setChatKey(result.id, decryptedKey);
-      }
-
-      chats.addChat({
-        id: result.id, 
-        type: newChatType, 
-        name: newChatName || null, 
-        memberCount: newChatType === 'pm' ? 2 : 1,
-        members: [$auth.user?.id!, ...members],
-        otherUser: newChatType === 'pm' ? { id: selectedUserId!, username: searchResults.find(u => u.id === selectedUserId)?.username || 'User' } : null,
-        lastMessage: null
-      });
       showCreateModal = false;
-      newChatName = '';
-      userSearch = '';
-      selectedUserId = null;
-      push(`/chats/${result.id}`);
-    } catch (e) {
-      
+      resetCreateState();
+      push(`/chats/${chat.id}`);
+    } catch {
     } finally {
       creatingChat = false;
     }
@@ -432,19 +108,19 @@
   async function handleLogout() {
     await api.auth.logout();
     auth.logout();
+    chats.clear();
     push('/login');
   }
 
   async function handleUpdateUsername() {
     if (!newUsername.trim() || updatingUsername) return;
+
     updatingUsername = true;
     try {
       const updatedUser = await api.users.update({ username: newUsername.trim() });
       auth.updateUser({ username: updatedUser.username });
       showUsernameModal = false;
       newUsername = '';
-    } catch (e) {
-      
     } finally {
       updatingUsername = false;
     }
@@ -452,25 +128,24 @@
 
   async function handleExportPrivateKey() {
     if (exportingKey || !exportConfirmChecked) return;
+
     exportingKey = true;
     try {
       const encryptedPrivateKey = localStorage.getItem('encryptedPrivateKey');
       if (!encryptedPrivateKey) {
         throw new Error('Encrypted private key not found');
       }
-      
+
       const blob = new Blob([encryptedPrivateKey], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `private_key_${$auth.user?.username || 'user'}.key`;
-      a.click();
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `private_key_${$auth.user?.username || 'user'}.key`;
+      link.click();
       URL.revokeObjectURL(url);
-      
+
       showExportKeyModal = false;
       exportConfirmChecked = false;
-    } catch (e) {
-      
     } finally {
       exportingKey = false;
     }
@@ -478,86 +153,102 @@
 
   async function handleChangePassword() {
     if (!newPassword || newPassword !== newPasswordConfirm || changingPassword) return;
+
     changingPassword = true;
     try {
       const { salt } = await api.auth.changePassword(newPassword);
-      
-      const oldEncryptedKey = localStorage.getItem('encryptedPrivateKey');
-      if (oldEncryptedKey && $auth.privateKey) {
-        const derivedKey = await crypto.deriveKey(newPassword, Uint8Array.from(atob(salt), c => c.charCodeAt(0)));
+      if ($auth.privateKey) {
+        const derivedKey = await crypto.deriveKey(newPassword, Uint8Array.from(atob(salt), (char) => char.charCodeAt(0)));
         const exportedKey = await window.crypto.subtle.exportKey('pkcs8', $auth.privateKey);
         const iv = window.crypto.getRandomValues(new Uint8Array(12));
         const encrypted = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, derivedKey, exportedKey);
         const combined = new Uint8Array(iv.length + encrypted.byteLength);
         combined.set(iv);
         combined.set(new Uint8Array(encrypted), iv.length);
-        const newEncryptedKey = btoa(String.fromCharCode(...combined));
-        localStorage.setItem('encryptedPrivateKey', newEncryptedKey);
+        localStorage.setItem('encryptedPrivateKey', btoa(String.fromCharCode(...combined)));
       }
-      
+
       showPasswordModal = false;
       newPassword = '';
       newPasswordConfirm = '';
       alert('Пароль изменён. На других устройствах потребуется повторный вход с новым паролем.');
-    } catch (e) {
-      
+    } catch {
       alert('Не удалось изменить пароль');
     } finally {
       changingPassword = false;
     }
   }
+
+  onMount(() => {
+    loadChats();
+
+    unsubscribeMemberEvent = memberEvent.subscribe(async (event) => {
+      if (!event) return;
+
+      const result = await chats.handleMemberEvent(event);
+      if (result.removedCurrentUser && selectedChatId === event.chatId) {
+        push('/chats');
+      }
+
+      memberEvent.set(null);
+    });
+
+    unsubscribeChatDeleted = chatDeletedEvent.subscribe((chatId) => {
+      if (!chatId) return;
+
+      const wasRemoved = chats.handleChatDeleted(chatId);
+      if (wasRemoved && selectedChatId === chatId) {
+        push('/chats');
+      }
+
+      chatDeletedEvent.set(null);
+    });
+
+    let lastProcessedMessageId = '';
+    unsubscribeSSE = sseMessage.subscribe(async (event) => {
+      if (!event || !event.message || !event.chatId) {
+        sseMessage.set(null);
+        return;
+      }
+
+      if (event.message.id === lastProcessedMessageId) {
+        sseMessage.set(null);
+        return;
+      }
+
+      lastProcessedMessageId = event.message.id;
+
+      try {
+        await chats.applyIncomingEvent(event.chatId, event.message, selectedChatId);
+      } finally {
+        sseMessage.set(null);
+      }
+    });
+
+    unsubscribeTypingEvent = typingEvent.subscribe((event) => {
+      if (!event) return;
+      chats.handleTypingEvent(event.chatId, event.userId);
+      typingEvent.set(null);
+    });
+  });
+
+  onDestroy(() => {
+    unsubscribeMemberEvent?.();
+    unsubscribeChatDeleted?.();
+    unsubscribeSSE?.();
+    unsubscribeTypingEvent?.();
+  });
 </script>
 
 <div class="layout">
-  <aside class="sidebar">
-    <header>
-      <div class="header-left">
-        <button class="icon-btn" on:click={() => showSettingsModal = true} title="Настройки">⚙️</button>
-        <h2>Чаты</h2>
-      </div>
-      <div class="header-actions">
-        <button class="icon-btn" on:click={() => showCreateModal = true} title="Новый чат">+</button>
-        <button class="icon-btn logout" on:click={handleLogout} title="Выход">↪</button>
-      </div>
-    </header>
-
-    <div class="chat-list">
-      {#if loading}
-        <div class="loading">Загрузка...</div>
-      {:else if $chats.length === 0}
-        <div class="empty">Пока нет чатов</div>
-      {:else}
-        {#each $chats as chat}
-          <a 
-            href="#/chats/{chat.id}" 
-            class="chat-item"
-            class:selected={selectedChatId === chat.id}
-          >
-            <div class="chat-icon">{chat.type === 'gm' ? 'G' : 'P'}</div>
-            <div class="chat-info">
-              <div class="chat-name">
-                {chat.type === 'pm' ? (chat.otherUser?.username || 'Личный чат') : (chat.name || 'Групповой чат')}
-                {#if chat.unreadCount && chat.unreadCount > 0}
-                  <span class="unread-badge">{chat.unreadCount}</span>
-                {/if}
-              </div>
-              <div class="chat-meta">
-                {#if chat.lastMessage}
-                  {#if chat.lastMessage.isSystem}
-                    <span class="last-message-system">{chat.lastMessage.content}</span>
-                  {:else}
-                    <span class="last-message">{chat.lastMessage.senderUsername ? chat.lastMessage.senderUsername + ': ' : ''}{chat.lastMessage.content}</span>
-                  {/if}
-                {:else}
-                  {chat.memberCount} участников
-                {/if}
-              </div>
-            </div>
-          </a>
-        {/each}
-      {/if}
-    </div>
-  </aside>
+  <ChatSidebar
+    chats={$chats}
+    {loading}
+    {selectedChatId}
+    on:create={() => (showCreateModal = true)}
+    on:logout={handleLogout}
+    on:settings={() => (showSettingsModal = true)}
+  />
 
   <main class="main">
     {#if selectedChatId}
@@ -571,71 +262,32 @@
 </div>
 
 {#if showCreateModal}
-  <div class="modal-overlay" on:click={() => showCreateModal = false}>
-    <div class="modal" on:click|stopPropagation>
-      <h3>Создать чат</h3>
-      <div class="field">
-        <label for="chatType">Тип</label>
-        <select id="chatType" bind:value={newChatType}>
-          <option value="gm">Групповой</option>
-          <option value="pm">Личный</option>
-        </select>
-      </div>
-      {#if newChatType === 'gm'}
-        <div class="field">
-          <label for="chatName">Название</label>
-          <input type="text" id="chatName" bind:value={newChatName} placeholder="Название группы" />
-        </div>
-      {/if}
-      {#if newChatType === 'pm'}
-        <div class="field">
-          <label for="userSearch">Выберите пользователя</label>
-          <input 
-            type="text" 
-            id="userSearch" 
-            bind:value={userSearch} 
-            on:input={searchUsers}
-            placeholder="Поиск пользователей..."
-          />
-        </div>
-        {#if searching}
-          <p>Поиск...</p>
-        {:else if searchResults.length > 0}
-          <div class="search-results">
-            {#each searchResults as user}
-              {@const hasExistingChat = $chats.some(c => c.type === 'pm' && c.members?.includes(user.id))}
-              {@const isSelected = selectedUserId === user.id}
-              <div 
-                class="search-result"
-                class:disabled={hasExistingChat}
-                class:selected={isSelected}
-                on:click={() => !hasExistingChat && (selectedUserId = user.id)}
-              >
-                {user.username}
-                {hasExistingChat ? '(чат уже существует)' : isSelected ? '(выбрано)' : ''}
-              </div>
-            {/each}
-          </div>
-        {/if}
-      {/if}
-      <div class="modal-actions">
-        <button on:click={() => { showCreateModal = false; userSearch = ''; selectedUserId = null; }}>Отмена</button>
-        <button 
-          class="primary" 
-          on:click={handleCreateChat} 
-          disabled={creatingChat || (newChatType === 'pm' && !selectedUserId)}
-        >
-          {creatingChat ? 'Создание...' : 'Создать'}
-        </button>
-      </div>
-    </div>
-  </div>
+  <CreateChatModal
+    bind:chatType={newChatType}
+    bind:chatName={newChatName}
+    bind:userSearch
+    bind:selectedUserId
+    {searchResults}
+    {searching}
+    creating={creatingChat}
+    chats={$chats}
+    on:close={() => {
+      showCreateModal = false;
+      resetCreateState();
+    }}
+    on:create={handleCreateChat}
+    on:search={searchUsers}
+    on:selectUser={(event) => {
+      selectedUserId = event.detail.userId;
+    }}
+  />
 {/if}
 
 {#if showSettingsModal}
-  <div class="modal-overlay" on:click={() => showSettingsModal = false}>
-    <div class="modal" on:click|stopPropagation>
-      <h3>Настройки</h3>
+  <div class="modal-shell">
+    <button class="modal-overlay" type="button" on:click={() => (showSettingsModal = false)} aria-label="Закрыть окно"></button>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h3 id="settings-title">Настройки</h3>
       <div class="settings-list">
         <button class="settings-btn" on:click={() => { showUsernameModal = true; showSettingsModal = false; }}>Изменить имя пользователя</button>
         <button class="settings-btn" disabled>Изменить аватар</button>
@@ -644,33 +296,24 @@
         <button class="settings-btn danger" disabled>Удалить аккаунт</button>
       </div>
       <div class="modal-actions">
-        <button on:click={() => showSettingsModal = false}>Закрыть</button>
+        <button on:click={() => (showSettingsModal = false)}>Закрыть</button>
       </div>
     </div>
   </div>
 {/if}
 
 {#if showUsernameModal}
-  <div class="modal-overlay" on:click={() => showUsernameModal = false}>
-    <div class="modal" on:click|stopPropagation>
-      <h3>Изменить имя пользователя</h3>
+  <div class="modal-shell">
+    <button class="modal-overlay" type="button" on:click={() => (showUsernameModal = false)} aria-label="Закрыть окно"></button>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="username-title">
+      <h3 id="username-title">Изменить имя пользователя</h3>
       <div class="field">
         <label for="newUsername">Новое имя</label>
-        <input 
-          type="text" 
-          id="newUsername" 
-          bind:value={newUsername} 
-          maxlength="30"
-          placeholder="Введите новое имя..."
-        />
+        <input id="newUsername" type="text" bind:value={newUsername} maxlength="30" placeholder="Введите новое имя..." />
       </div>
       <div class="modal-actions">
         <button on:click={() => { showUsernameModal = false; newUsername = ''; }}>Отмена</button>
-        <button 
-          class="primary" 
-          on:click={handleUpdateUsername}
-          disabled={updatingUsername || !newUsername.trim()}
-        >
+        <button class="primary" on:click={handleUpdateUsername} disabled={updatingUsername || !newUsername.trim()}>
           {updatingUsername ? 'Сохранение...' : 'Сохранить'}
         </button>
       </div>
@@ -679,24 +322,21 @@
 {/if}
 
 {#if showExportKeyModal}
-  <div class="modal-overlay" on:click={() => showExportKeyModal = false}>
-    <div class="modal" on:click|stopPropagation>
-      <h3>Экспорт приватного ключа</h3>
+  <div class="modal-shell">
+    <button class="modal-overlay" type="button" on:click={() => (showExportKeyModal = false)} aria-label="Закрыть окно"></button>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="export-key-title">
+      <h3 id="export-key-title">Экспорт приватного ключа</h3>
       <div class="warning-box">
-        ⚠️ Сохраните этот ключ в надёжном месте. С его помощью можно получить доступ к вашему аккаунту с другого устройства.
+        Сохраните этот ключ в надёжном месте. С его помощью можно получить доступ к вашему аккаунту с другого устройства.
       </div>
-      <p class="modal-desc">Этот ключ может использоваться для входа в аккаунт на другом устройстве.</p>
+      <p class="modal-desc">Этот ключ можно использовать для входа в аккаунт на другом устройстве.</p>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={exportConfirmChecked} />
         <span>Я понимаю риски и хочу экспортировать ключ</span>
       </label>
       <div class="modal-actions">
         <button on:click={() => { showExportKeyModal = false; exportConfirmChecked = false; }}>Отмена</button>
-        <button 
-          class="primary" 
-          on:click={handleExportPrivateKey}
-          disabled={exportingKey || !exportConfirmChecked}
-        >
+        <button class="primary" on:click={handleExportPrivateKey} disabled={exportingKey || !exportConfirmChecked}>
           {exportingKey ? 'Экспорт...' : 'Скачать'}
         </button>
       </div>
@@ -705,40 +345,27 @@
 {/if}
 
 {#if showPasswordModal}
-  <div class="modal-overlay" on:click={() => showPasswordModal = false}>
-    <div class="modal" on:click|stopPropagation>
-      <h3>Изменить пароль</h3>
+  <div class="modal-shell">
+    <button class="modal-overlay" type="button" on:click={() => (showPasswordModal = false)} aria-label="Закрыть окно"></button>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="password-title">
+      <h3 id="password-title">Изменить пароль</h3>
       <div class="warning-box">
-        ⚠️ Внимание: после смены пароля приватный ключ на других устройствах перестанет работать. Вам нужно будет загрузить новый зашифрованный ключ на других устройствах.
+        После смены пароля приватный ключ на других устройствах перестанет работать. Там потребуется загрузить новый зашифрованный ключ.
       </div>
       <div class="field">
         <label for="newPassword">Новый пароль</label>
-        <input 
-          type="password" 
-          id="newPassword" 
-          bind:value={newPassword} 
-          placeholder="Введите новый пароль..."
-        />
+        <input id="newPassword" type="password" bind:value={newPassword} placeholder="Введите новый пароль..." />
       </div>
       <div class="field">
         <label for="newPasswordConfirm">Подтвердите пароль</label>
-        <input 
-          type="password" 
-          id="newPasswordConfirm" 
-          bind:value={newPasswordConfirm} 
-          placeholder="Повторите пароль..."
-        />
+        <input id="newPasswordConfirm" type="password" bind:value={newPasswordConfirm} placeholder="Повторите пароль..." />
       </div>
       {#if newPassword && newPasswordConfirm && newPassword !== newPasswordConfirm}
         <p class="error-text">Пароли не совпадают</p>
       {/if}
       <div class="modal-actions">
         <button on:click={() => { showPasswordModal = false; newPassword = ''; newPasswordConfirm = ''; }}>Отмена</button>
-        <button 
-          class="primary" 
-          on:click={handleChangePassword}
-          disabled={changingPassword || !newPassword || newPassword !== newPasswordConfirm}
-        >
+        <button class="primary" on:click={handleChangePassword} disabled={changingPassword || !newPassword || newPassword !== newPasswordConfirm}>
           {changingPassword ? 'Смена...' : 'Изменить'}
         </button>
       </div>
@@ -751,150 +378,6 @@
     display: flex;
     height: 100vh;
     background: #fff;
-  }
-
-  .sidebar {
-    width: 320px;
-    border-right: 1px solid #e0e0e0;
-    display: flex;
-    flex-direction: column;
-    background: #f8f9fa;
-  }
-
-  .sidebar header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 16px 20px;
-    border-bottom: 1px solid #e0e0e0;
-    background: #fff;
-  }
-
-  .header-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .sidebar h2 {
-    margin: 0;
-    font-size: 20px;
-    font-weight: 600;
-  }
-
-  .header-actions {
-    display: flex;
-    gap: 8px;
-  }
-
-  .icon-btn {
-    width: 36px;
-    height: 36px;
-    border: none;
-    border-radius: 8px;
-    background: #f0f0f0;
-    cursor: pointer;
-    font-size: 18px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.2s;
-  }
-
-  .icon-btn:hover {
-    background: #e0e0e0;
-  }
-
-  .icon-btn.logout {
-    color: #f44336;
-  }
-
-  .chat-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 8px;
-  }
-
-  .chat-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    border-radius: 10px;
-    text-decoration: none;
-    color: inherit;
-    transition: background 0.2s;
-    margin-bottom: 4px;
-  }
-
-  .chat-item:hover {
-    background: #e8e8e8;
-  }
-
-  .chat-item.selected {
-    background: #e3f2fd;
-  }
-
-  .chat-icon {
-    width: 44px;
-    height: 44px;
-    background: #4CAF50;
-    color: white;
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 600;
-    font-size: 16px;
-    flex-shrink: 0;
-  }
-
-  .chat-info {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .chat-name {
-    font-weight: 600;
-    font-size: 15px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .unread-badge {
-    background: #f44336;
-    color: white;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 6px;
-    border-radius: 10px;
-    min-width: 18px;
-    text-align: center;
-  }
-
-  .chat-meta {
-    font-size: 13px;
-    color: #888;
-    margin-top: 2px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 180px;
-  }
-
-  .last-message {
-    font-size: 12px;
-    color: #666;
-  }
-
-  .last-message-system {
-    font-size: 12px;
-    color: #999;
-    font-style: italic;
   }
 
   .main {
@@ -914,34 +397,35 @@
     font-size: 16px;
   }
 
-  .loading, .empty {
-    padding: 40px 20px;
-    text-align: center;
-    color: #888;
-  }
-
-  .modal-overlay {
+  .modal-shell {
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0,0,0,0.5);
+    inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 100;
   }
 
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    border: none;
+    padding: 0;
+    cursor: default;
+  }
+
   .modal {
+    position: relative;
     background: white;
     padding: 28px;
     border-radius: 14px;
     width: 400px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    z-index: 1;
   }
 
-  .modal h3 {
+  h3 {
     margin: 0 0 24px;
     font-size: 20px;
   }
@@ -957,17 +441,13 @@
     font-size: 14px;
   }
 
-  .field input, .field select {
+  .field input {
     width: 100%;
     padding: 12px;
     border: 1px solid #ddd;
     border-radius: 8px;
     font-size: 15px;
-  }
-
-  .field input:focus, .field select:focus {
-    outline: none;
-    border-color: #4CAF50;
+    box-sizing: border-box;
   }
 
   .modal-actions {
@@ -986,46 +466,9 @@
     font-weight: 500;
   }
 
-  .modal-actions button.primary {
-    background: #4CAF50;
+  .primary {
+    background: #4caf50;
     color: white;
-  }
-
-  .modal-actions button.primary:hover {
-    background: #45a049;
-  }
-
-  .modal-actions button:disabled {
-    background: #ccc;
-  }
-
-  .search-results {
-    max-height: 200px;
-    overflow-y: auto;
-    border: 1px solid #eee;
-    border-radius: 8px;
-    margin-top: 12px;
-  }
-
-  .search-result {
-    padding: 12px 16px;
-    cursor: pointer;
-    border-bottom: 1px solid #f0f0f0;
-    font-size: 15px;
-  }
-
-  .search-result:hover:not(.disabled) {
-    background: #f9f9f9;
-  }
-
-  .search-result.disabled {
-    color: #999;
-    cursor: not-allowed;
-  }
-
-  .search-result.selected {
-    background: #e3f2fd;
-    font-weight: 600;
   }
 
   .settings-list {
@@ -1060,17 +503,6 @@
     border-color: #ffcdd2;
   }
 
-  .settings-btn.danger:hover:not(:disabled) {
-    background: #ffebee;
-  }
-
-  .modal-desc {
-    font-size: 14px;
-    color: #666;
-    margin-bottom: 16px;
-    line-height: 1.4;
-  }
-
   .warning-box {
     background: #fff3cd;
     border: 1px solid #ffc107;
@@ -1081,6 +513,13 @@
     margin-bottom: 16px;
   }
 
+  .modal-desc {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 16px;
+    line-height: 1.4;
+  }
+
   .checkbox-label {
     display: flex;
     align-items: center;
@@ -1088,11 +527,6 @@
     cursor: pointer;
     font-size: 14px;
     margin-bottom: 20px;
-  }
-
-  .checkbox-label input {
-    width: 18px;
-    height: 18px;
   }
 
   .error-text {

@@ -1,3 +1,11 @@
+import type {
+  Chat,
+  ChatMessagesResponse,
+  CreateChatRequest,
+  Message,
+  SearchUserResult
+} from './types';
+
 const API_BASE = '/api';
 
 let authToken: string | null = null;
@@ -46,6 +54,7 @@ export interface LoginResponse {
   id: string;
   username: string;
   salt: string;
+  publicKey: string;
   token: string;
 }
 
@@ -54,36 +63,6 @@ export interface UserResponse {
   username: string;
   publicKey: string;
   createdAt: string;
-}
-
-export interface Chat {
-  id: string;
-  type: 'pm' | 'gm';
-  name: string | null;
-  memberCount: number;
-}
-
-export interface ChatDetail {
-  id: string;
-  type: 'pm' | 'gm';
-  name: string | null;
-  createdBy: string;
-  createdAt: string;
-  members: {
-    id: string;
-    username: string;
-    encryptedKey: string;
-  }[];
-}
-
-export interface Message {
-  id: string;
-  chatId?: string;
-  senderId: string | null;
-  content: string;
-  fileIds: string[];
-  timestamp: string;
-  editedAt: string | null;
 }
 
 export const api = {
@@ -108,16 +87,16 @@ export const api = {
       request<UserResponse>('/users/me', { method: 'PATCH', body: JSON.stringify(data) }),
     
     search: (query: string) => 
-      request<{ id: string; username: string; publicKey: string }[]>('/users/search?q=' + encodeURIComponent(query))
+      request<SearchUserResult[]>('/users/search?q=' + encodeURIComponent(query))
   },
 
   chats: {
     list: () => request<Chat[]>('/chats'),
     
-    create: (data: { type: 'pm' | 'gm'; name?: string; members?: string[]; encryptedKey: string }) => 
-      request<{ id: string }>('/chats', { method: 'POST', body: JSON.stringify(data) }),
+    create: (data: CreateChatRequest) => 
+      request<Chat>('/chats', { method: 'POST', body: JSON.stringify(data) }),
     
-    get: (chatId: string) => request<ChatDetail>(`/chats/${chatId}`),
+    get: (chatId: string) => request<Chat>(`/chats/${chatId}`),
     
     delete: (chatId: string) => 
       request<{ message: string }>(`/chats/${chatId}`, { method: 'DELETE' }),
@@ -144,11 +123,14 @@ export const api = {
       if (options.beforeCnt) params.set('beforeCnt', String(options.beforeCnt));
       if (options.afterCnt) params.set('afterCnt', String(options.afterCnt));
       const url = `/chats/${chatId}/messages?${params.toString()}`;
-      return request<{ messages: Message[]; hasMoreBefore: boolean; hasMoreAfter: boolean; firstUnreadId: string | null; unreadCount: number }>(url);
+      return request<ChatMessagesResponse>(url);
     },
     
     markAsRead: (chatId: string) =>
       request<{ success: boolean; lastReadAt: number }>(`/chats/${chatId}/read`, { method: 'PATCH' }),
+
+    sendTyping: (chatId: string) =>
+      request<{ success: boolean }>(`/chats/${chatId}/typing`, { method: 'POST' }),
     
     sendMessage: (chatId: string, content: string, fileIds?: string[]) => 
       request<Message>(`/chats/${chatId}/messages`, { 
