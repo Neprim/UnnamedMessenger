@@ -28,6 +28,7 @@
   <button class="modal-overlay" type="button" on:click={handleClose} aria-label="Закрыть окно"></button>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="create-chat-title">
     <h3 id="create-chat-title">Создать чат</h3>
+
     <div class="field">
       <label for="chatType">Тип</label>
       <select id="chatType" bind:value={chatType}>
@@ -39,7 +40,7 @@
     {#if chatType === 'gm'}
       <div class="field">
         <label for="chatName">Название</label>
-        <input id="chatName" type="text" bind:value={chatName} placeholder="Название группы" />
+        <input id="chatName" type="text" bind:value={chatName} maxlength="30" placeholder="Название группы" />
       </div>
     {/if}
 
@@ -83,7 +84,12 @@
 
     <div class="modal-actions">
       <button type="button" on:click={handleClose}>Отмена</button>
-      <button type="button" class="primary" disabled={creating || (chatType === 'pm' && !selectedUserId)} on:click={() => dispatch('create')}>
+      <button
+        type="button"
+        class="primary"
+        disabled={creating || (chatType === 'pm' ? !selectedUserId : !chatName.trim())}
+        on:click={() => dispatch('create')}
+      >
         {creating ? 'Создание...' : 'Создать'}
       </button>
     </div>

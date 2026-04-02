@@ -171,6 +171,12 @@ export const api = {
       request<Chat>('/chats', { method: 'POST', body: JSON.stringify(data) }),
     
     get: (chatId: string) => request<Chat>(`/chats/${chatId}`),
+
+    update: (chatId: string, data: { name: string; nameLength: number }) =>
+      request<Chat>(`/chats/${chatId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+
+    updateAvatar: (chatId: string, fileId: string | null) =>
+      request<Chat>(`/chats/${chatId}/avatar`, { method: 'PUT', body: JSON.stringify({ fileId }) }),
     
     delete: (chatId: string) => 
       request<{ message: string }>(`/chats/${chatId}`, { method: 'DELETE' }),

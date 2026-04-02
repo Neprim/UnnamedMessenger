@@ -7,38 +7,140 @@
   export let isCreator = false;
   export let chatType: ChatType = 'gm';
   export let currentUserId: string | undefined;
+  export let chatName = 'Чат';
+  export let chatAvatarUrl: string | null | undefined = null;
+  export let canAddMembers = false;
 
   const dispatch = createEventDispatcher<{
     close: void;
     remove: { userId: string };
     deleteChat: void;
+    leaveChat: void;
+    addMember: void;
+    editAvatar: void;
+    editName: void;
   }>();
+
+  $: chatKindLabel = chatType === 'pm' ? 'Личный чат' : 'Групповой чат';
+  $: canEditChat = isCreator && chatType === 'gm';
 </script>
 
 <div class="modal-shell">
   <button class="modal-overlay" type="button" on:click={() => dispatch('close')} aria-label="Закрыть окно"></button>
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="members-title">
-    <h3 id="members-title">Участники</h3>
-    <div class="members-list">
-      {#each members as member}
-        <div class="member-item">
-          <div class="member-main">
-            <Avatar name={member.username} src={member.avatarUrl} size={36} />
-            <span class="member-name">{member.username}</span>
-          </div>
-          {#if isCreator && chatType === 'gm' && member.id !== currentUserId}
-            <button class="remove-btn" type="button" on:click={() => dispatch('remove', { userId: member.id })}>Удалить</button>
-          {/if}
+
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="chat-details-title">
+    <div class="chat-summary">
+      {#if canEditChat}
+        <button
+          class="chat-avatar-trigger editable"
+          type="button"
+          aria-label="Изменить аватар чата"
+          on:click={() => dispatch('editAvatar')}
+        >
+          <Avatar name={chatName} src={chatAvatarUrl} size={72} />
+          <span class="edit-hint avatar-hint" aria-hidden="true">✎</span>
+        </button>
+      {:else}
+        <div class="chat-avatar-trigger">
+          <Avatar name={chatName} src={chatAvatarUrl} size={72} />
         </div>
-      {/each}
-    </div>
-    <div class="modal-actions">
-      {#if chatType === 'pm'}
-        <button class="delete-chat-btn" type="button" on:click={() => dispatch('deleteChat')}>Удалить чат</button>
-      {:else if isCreator && members.length === 1}
-        <button class="delete-chat-btn" type="button" on:click={() => dispatch('deleteChat')}>Удалить чат</button>
       {/if}
-      <button type="button" on:click={() => dispatch('close')}>Закрыть</button>
+
+      <div class="chat-summary-text">
+        {#if canEditChat}
+          <button
+            class="chat-name-trigger editable"
+            type="button"
+            aria-label="Изменить название чата"
+            on:click={() => dispatch('editName')}
+          >
+            <span id="chat-details-title" class="chat-title-text">{chatName}</span>
+            <span class="edit-hint name-hint" aria-hidden="true">✎</span>
+          </button>
+        {:else}
+          <div class="chat-name-trigger">
+            <span id="chat-details-title" class="chat-title-text">{chatName}</span>
+          </div>
+        {/if}
+        <p>{chatKindLabel}
+          {#if chatType === 'gm'}
+           · {members.length} {members.length === 1 ? 'участник' : members.length < 5 ? 'участника' : 'участников'}
+          {/if}
+          </p>
+      </div>
+    </div>
+
+    <section class="section">
+      <div class="section-header">
+        <h4>Все вложения чата</h4>
+        <span>Скоро</span>
+      </div>
+
+      <div class="media-grid">
+        <button type="button" class="media-tile" disabled>
+          <strong>Изображения</strong>
+          <span>Просмотр всех фото и картинок, которыми делились в чате.</span>
+        </button>
+        <button type="button" class="media-tile" disabled>
+          <strong>Документы</strong>
+          <span>PDF, архивы, таблицы, заметки и остальные файлы.</span>
+        </button>
+        <button type="button" class="media-tile" disabled>
+          <strong>Аудио и видео</strong>
+          <span>Медиафайлы, голосовые и ролики в одном месте.</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">
+        <h4>Участники</h4>
+        {#if canAddMembers}
+          <button class="link-action" type="button" on:click={() => dispatch('addMember')}>Добавить</button>
+        {/if}
+      </div>
+
+      <div class="members-list">
+        {#each members as member}
+          <div class="member-item">
+            <div class="member-main">
+              <Avatar name={member.username} src={member.avatarUrl} size={40} />
+              <div class="member-meta">
+                <span class="member-name">{member.username}</span>
+                <span class="member-role">{member.id === currentUserId ? 'Вы' : 'Участник'}</span>
+              </div>
+            </div>
+
+            {#if isCreator && chatType === 'gm' && member.id !== currentUserId}
+              <button class="remove-btn" type="button" on:click={() => dispatch('remove', { userId: member.id })}>
+                Удалить
+              </button>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">
+        <h4>Действия</h4>
+      </div>
+
+      <div class="action-list">
+        {#if chatType === 'gm' && !isCreator}
+          <button class="secondary-action" type="button" on:click={() => dispatch('leaveChat')}>Покинуть чат</button>
+        {/if}
+
+        {#if chatType === 'pm'}
+          <button class="danger-action" type="button" on:click={() => dispatch('deleteChat')}>Удалить чат</button>
+        {:else if isCreator}
+          <button class="danger-action" type="button" on:click={() => dispatch('deleteChat')}>Удалить чат</button>
+        {/if}
+      </div>
+    </section>
+
+    <div class="modal-actions">
+      <button type="button" class="close-btn" on:click={() => dispatch('close')}>Закрыть</button>
     </div>
   </div>
 </div>
@@ -56,7 +158,7 @@
   .modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(15, 23, 42, 0.48);
     border: none;
     padding: 0;
     cursor: default;
@@ -64,31 +166,197 @@
 
   .modal {
     position: relative;
-    background: white;
-    padding: 28px;
-    border-radius: 14px;
-    width: 400px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
     z-index: 1;
+    width: min(740px, calc(100vw - 32px));
+    max-height: min(88vh, 760px);
+    overflow: auto;
+    border-radius: 22px;
+    padding: 28px;
+    background:
+      radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 32%),
+      radial-gradient(circle at bottom left, rgba(251, 191, 36, 0.1), transparent 30%),
+      linear-gradient(180deg, #ffffff, #f8fafc);
+    box-shadow: 0 24px 56px rgba(15, 23, 42, 0.24);
   }
 
-  h3 {
-    margin: 0 0 20px;
-    font-size: 18px;
+  .chat-summary {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .chat-avatar-trigger,
+  .chat-name-trigger {
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+  }
+
+  .chat-avatar-trigger {
+    position: relative;
+    display: inline-flex;
+    border-radius: 50%;
+  }
+
+  .chat-avatar-trigger.editable,
+  .chat-name-trigger.editable {
+    cursor: pointer;
+  }
+
+  .chat-summary-text {
+    min-width: 0;
+  }
+
+  .chat-name-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 100%;
+  }
+
+  .chat-title-text {
+    display: block;
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: #0f172a;
+    overflow-wrap: anywhere;
+    text-align: left;
+  }
+
+  .chat-summary-text p {
+    margin: 8px 0 0;
+    font-size: 14px;
+    color: #64748b;
+  }
+
+  .edit-hint {
+    opacity: 0;
+    transform: translateY(2px);
+    transition:
+      opacity 0.16s ease,
+      transform 0.16s ease;
+  }
+
+  .avatar-hint {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.88);
+    color: white;
+    font-size: 13px;
+  }
+
+  .name-hint {
+    flex: none;
+    font-size: 15px;
+    color: #64748b;
+  }
+
+  .chat-avatar-trigger.editable:hover .edit-hint,
+  .chat-name-trigger.editable:hover .edit-hint,
+  .chat-avatar-trigger.editable:focus-visible .edit-hint,
+  .chat-name-trigger.editable:focus-visible .edit-hint {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .section {
+    margin-bottom: 24px;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .section-header h4 {
+    margin: 0;
+    font-size: 15px;
+    color: #0f172a;
+  }
+
+  .section-header span {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #94a3b8;
+  }
+
+  .media-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+  }
+
+  .media-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    min-height: 116px;
+    padding: 16px;
+    border-radius: 18px;
+    border: 1px solid #dbe4ee;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(241, 245, 249, 0.96)),
+      radial-gradient(circle at top right, rgba(148, 163, 184, 0.18), transparent 60%);
+    color: #334155;
+    text-align: left;
+    cursor: default;
+    opacity: 1;
+  }
+
+  .media-tile strong {
+    font-size: 15px;
+  }
+
+  .media-tile span {
+    font-size: 13px;
+    line-height: 1.45;
+    color: #64748b;
+  }
+
+  .link-action {
+    border: none;
+    padding: 0;
+    background: transparent;
+    color: #2563eb;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
   }
 
   .members-list {
-    max-height: 300px;
-    overflow-y: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.82);
+    overflow: hidden;
   }
 
   .member-item {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 12px;
-    border-bottom: 1px solid #eee;
+    justify-content: space-between;
     gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid #eef2f7;
+  }
+
+  .member-item:last-child {
+    border-bottom: none;
   }
 
   .member-main {
@@ -98,46 +366,108 @@
     min-width: 0;
   }
 
+  .member-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
   .member-name {
     font-size: 15px;
+    color: #0f172a;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
+  .member-role {
+    font-size: 12px;
+    color: #94a3b8;
+  }
+
   .remove-btn {
-    padding: 6px 12px;
-    background: #f44336;
-    color: white;
     border: none;
-    border-radius: 6px;
+    border-radius: 10px;
+    padding: 8px 12px;
+    background: #fee2e2;
+    color: #b91c1c;
     cursor: pointer;
     font-size: 13px;
+    font-weight: 600;
   }
 
   .remove-btn:hover {
-    background: #d32f2f;
+    background: #fecaca;
+  }
+
+  .action-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .secondary-action,
+  .danger-action,
+  .close-btn {
+    border: none;
+    border-radius: 12px;
+    padding: 11px 16px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .secondary-action {
+    background: #e2e8f0;
+    color: #334155;
+  }
+
+  .secondary-action:hover {
+    background: #cbd5e1;
+  }
+
+  .danger-action {
+    background: #fee2e2;
+    color: #b91c1c;
+  }
+
+  .danger-action:hover {
+    background: #fecaca;
   }
 
   .modal-actions {
     display: flex;
-    gap: 12px;
     justify-content: flex-end;
-    margin-top: 20px;
+    margin-top: 28px;
   }
 
-  button {
-    padding: 10px 20px;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-  }
-
-  .delete-chat-btn {
-    background: #f44336;
+  .close-btn {
+    background: #0f172a;
     color: white;
-    margin-right: auto;
+  }
+
+  .close-btn:hover {
+    background: #1e293b;
+  }
+
+  @media (max-width: 640px) {
+    .modal {
+      padding: 20px;
+      border-radius: 18px;
+    }
+
+    .chat-summary {
+      align-items: flex-start;
+    }
+
+    .member-item {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .remove-btn {
+      width: 100%;
+    }
   }
 </style>

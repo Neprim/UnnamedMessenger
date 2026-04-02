@@ -1,16 +1,42 @@
 <script lang="ts">
+  import { getCachedAvatarUrl } from '../../lib/avatar-cache';
+
   export let name = '';
   export let src: string | null | undefined = null;
   export let size = 40;
   export let alt = '';
 
   let imageFailed = false;
+  let resolvedSrc: string | null = null;
+  let loadVersion = 0;
 
   $: initials = (name || '?').trim().charAt(0).toUpperCase();
   $: if (src) {
     imageFailed = false;
+    void resolveAvatarSource(src);
+  } else {
+    resolvedSrc = null;
   }
-  $: showImage = Boolean(src) && !imageFailed;
+  $: showImage = Boolean(resolvedSrc) && !imageFailed;
+
+  async function resolveAvatarSource(nextSrc: string) {
+    const version = ++loadVersion;
+
+    try {
+      const cachedUrl = await getCachedAvatarUrl(nextSrc);
+      if (version !== loadVersion || nextSrc !== src) {
+        return;
+      }
+
+      resolvedSrc = cachedUrl ?? nextSrc;
+    } catch {
+      if (version !== loadVersion || nextSrc !== src) {
+        return;
+      }
+
+      resolvedSrc = nextSrc;
+    }
+  }
 </script>
 
 <div
@@ -19,7 +45,7 @@
   aria-label={alt || name || 'Avatar'}
 >
   {#if showImage}
-    <img src={src ?? undefined} alt={alt || name} on:error={() => (imageFailed = true)} />
+    <img src={resolvedSrc ?? undefined} alt={alt || name} loading="lazy" decoding="async" on:error={() => (imageFailed = true)} />
   {:else}
     <span>{initials}</span>
   {/if}

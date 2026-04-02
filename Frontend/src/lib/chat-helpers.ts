@@ -47,6 +47,25 @@ export function isPersonalChatWithUser(chat: Chat, userId: string): boolean {
   return chat.type === 'pm' && Boolean(chat.members?.some((member) => member.id === userId));
 }
 
+export async function decryptChatName(
+  chat: Pick<Chat, 'type' | 'name'>,
+  chatKey: CryptoKey | null
+): Promise<string | null> {
+  if (chat.type !== 'gm' || !chat.name) {
+    return chat.name ?? null;
+  }
+
+  if (!chatKey) {
+    return chat.name;
+  }
+
+  try {
+    return await crypto.decryptMessage(chatKey, chat.name);
+  } catch {
+    return chat.name;
+  }
+}
+
 export async function decryptMessageForDisplay(
   message: Message,
   chatKey: CryptoKey | null,

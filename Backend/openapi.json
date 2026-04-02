@@ -409,28 +409,33 @@
                         "enum": ["pm", "gm"]
                       },
                       "name": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "Encrypted group chat name. Personal chats usually return null."
+                      },
+                      "createdBy": {
                         "type": "string"
                       },
-                      "members": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
+                      "createdAt": {
+                        "type": "integer"
                       },
-                      "lastMessage": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "text": {
-                            "type": "string"
-                          },
-                          "timestamp": {
-                            "type": "string",
-                            "format": "date-time"
-                          }
-                        }
+                      "memberCount": {
+                        "type": "integer"
+                      },
+                      "avatarFileId": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "avatarUpdatedAt": {
+                        "type": "integer",
+                        "nullable": true
+                      },
+                      "unreadCount": {
+                        "type": "integer"
+                      },
+                      "firstUnreadId": {
+                        "type": "string",
+                        "nullable": true
                       }
                     }
                   }
@@ -464,7 +469,12 @@
                     "enum": ["pm", "gm"]
                   },
                   "name": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Encrypted group chat name"
+                  },
+                  "nameLength": {
+                    "type": "integer",
+                    "description": "Plaintext chat name length for validation"
                   },
                   "members": {
                     "type": "array",
@@ -525,6 +535,60 @@
           }
         }
       },
+      "patch": {
+        "summary": "Update encrypted group chat name",
+        "tags": ["Chats"],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "nameLength"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Encrypted group chat name"
+                  },
+                  "nameLength": {
+                    "type": "integer",
+                    "description": "Plaintext chat name length for validation"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chat updated successfully"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "403": {
+            "description": "Only group creator can update chat"
+          },
+          "404": {
+            "description": "Chat not found"
+          }
+        }
+      },
       "delete": {
         "summary": "Delete chat",
         "tags": ["Chats"],
@@ -555,6 +619,58 @@
           },
           "404": {
             "description": "Chat not found"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/avatar": {
+      "put": {
+        "summary": "Set or clear group chat avatar",
+        "tags": ["Chats"],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fileId": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Own chat file id to use as avatar, or null to clear it"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chat avatar updated successfully"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "403": {
+            "description": "Only group creator can update chat avatar"
+          },
+          "404": {
+            "description": "Chat or file not found"
           }
         }
       }

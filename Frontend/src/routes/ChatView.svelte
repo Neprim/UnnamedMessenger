@@ -6,9 +6,12 @@
   import { cacheFile, getCachedFile, invalidateCachedFile, type CachedFileAsset } from '../lib/file-cache';
   import MessageList from '../components/chat/MessageList.svelte';
   import MessageInput from '../components/chat/MessageInput.svelte';
+  import ChatImagePickerModal from '../components/chat/ChatImagePickerModal.svelte';
   import MembersModal from '../components/chat/MembersModal.svelte';
+  import AvatarCropModal from '../components/settings/AvatarCropModal.svelte';
+  import { getFavoriteChatImageIds, toggleFavoriteChatImage } from '../lib/chat-image-favorites';
   import { formatFileSize, isSystemMessage, parseFileMetadataJson } from '../lib/chat-helpers';
-  import type { ChatMember, Message, SearchUserResult } from '../lib/types';
+  import type { ChatFileMetadata, ChatMember, Message, SearchUserResult } from '../lib/types';
 
   export let params: { id: string };
   export let chatDetail: Chat | null = null;
@@ -18,10 +21,27 @@
   let sending = false;
   let showAddMemberModal = false;
   let showMembersModal = false;
+  let showRenameChatModal = false;
+  let showChatAvatarModal = false;
+  let showImageLibraryModal = false;
   let userSearch = '';
   let searchResults: SearchUserResult[] = [];
   let searching = false;
   let addingMember = false;
+  let renamingChat = false;
+  let updatingChatAvatar = false;
+  let renameChatValue = '';
+  let pendingChatAvatarFile: File | null = null;
+  let dragDepth = 0;
+  let loadingImageLibrary = false;
+  let imageLibraryItems: Array<{
+    fileId: string;
+    previewUrl: string | null;
+    metadata: ChatFileMetadata;
+    updatedAt: number;
+    isFavorite: boolean;
+  }> = [];
+  let selectedReusableAttachments: Array<{ id: string; fileId: string; name: string; size: number }> = [];
   let contextMenu: { x: number; y: number; messageId: string; senderId: string | null; visible: boolean } = {
     x: 0,
     y: 0,
@@ -70,6 +90,10 @@
   $: messages = selectedChat?.messages ?? [];
   $: chatKey = selectedChat?.chatKey ?? null;
   $: otherUserName = selectedChat?.otherUser?.username ?? null;
+  $: chatDisplayName =
+    selectedChat?.type === 'pm' && otherUserName ? otherUserName : selectedChat?.name || 'Чат';
+  $: chatDisplayAvatarUrl = selectedChat?.type === 'pm' ? selectedChat?.otherUser?.avatarUrl ?? null : selectedChat?.avatarUrl ?? null;
+  $: canAddMembers = Boolean(isCreator && selectedChat?.type === 'gm');
   $: isCreator = selectedChat?.createdBy === $auth.user?.id;
   $: isOwnMessage = contextMenu.senderId === $auth.user?.id;
   $: typingMemberNames = (selectedChat?.typingUsers ?? [])
@@ -77,6 +101,7 @@
     .filter((username): username is string => Boolean(username));
   $: memberAvatarUrls = Object.fromEntries((selectedChat?.members ?? []).map((member) => [member.id, member.avatarUrl ?? null]));
   $: visibleFileIds = Array.from(new Set(messages.flatMap((message) => message.fileIds)));
+  $: isDragActive = dragDepth > 0;
 
   type MessageGroup = {
     senderId: string;
@@ -93,6 +118,16 @@
     estimatedStoredSize: number;
     uploading?: boolean;
   };
+
+  $: composerAttachments = [
+    ...selectedReusableAttachments.map((attachment) => ({
+      id: attachment.id,
+      name: `${attachment.name} (из чата)`,
+      size: attachment.size,
+      uploading: false
+    })),
+    ...pendingAttachments
+  ];
 
   function rememberChatFileMetadata(
     chatId: string,
@@ -140,6 +175,63 @@
     fileDisplayById = {};
     imagePreviewById = {};
     imagePreviewResolutionInFlight.clear();
+  }
+
+  function hasDraggedFiles(dataTransfer: DataTransfer | null) {
+    if (!dataTransfer) {
+      return false;
+    }
+
+    const types = Array.from(dataTransfer.types ?? []);
+    return types.includes('Files') || types.includes('application/x-moz-file');
+  }
+
+  function extractDroppedFiles(dataTransfer: DataTransfer | null) {
+    if (!dataTransfer) {
+      return [];
+    }
+
+    return Array.from(dataTransfer.files ?? []);
+  }
+
+  function handleDragEnter(event: DragEvent) {
+    if (!hasDraggedFiles(event.dataTransfer) || sending || !chatKey) {
+      return;
+    }
+
+    event.preventDefault();
+    dragDepth += 1;
+  }
+
+  function handleDragOver(event: DragEvent) {
+    if (!hasDraggedFiles(event.dataTransfer) || sending || !chatKey) {
+      return;
+    }
+
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+  }
+
+  function handleDragLeave(event: DragEvent) {
+    if (!hasDraggedFiles(event.dataTransfer) || sending || !chatKey) {
+      return;
+    }
+
+    event.preventDefault();
+    dragDepth = Math.max(0, dragDepth - 1);
+  }
+
+  async function handleDrop(event: DragEvent) {
+    const droppedFiles = extractDroppedFiles(event.dataTransfer);
+    if (!droppedFiles.length || sending || !chatKey) {
+      return;
+    }
+
+    event.preventDefault();
+    dragDepth = 0;
+    await handleFilePick(droppedFiles);
   }
 
   function handleContainerScroll() {
@@ -361,6 +453,36 @@
     error = '';
   }
 
+  function showSoonToast(message: string) {
+    clearError();
+    error = message;
+  }
+
+  function openChatAvatarPicker() {
+    document.getElementById('chatAvatarInput')?.click();
+  }
+
+  function handleChatAvatarFileChange(event: Event) {
+    const target = event.target as HTMLInputElement;
+    const file = target.files?.[0];
+    target.value = '';
+
+    if (!file) return;
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      error = 'Поддерживаются только JPEG, PNG и WebP';
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      error = 'Размер файла не должен превышать 5 МБ';
+      return;
+    }
+
+    pendingChatAvatarFile = file;
+    showChatAvatarModal = true;
+  }
+
   function computeInlineImagePreviewSize(width: number, height: number) {
     const minDownscaledPreviewSize = 48;
     const minUpscaledPreviewSize = 128;
@@ -435,14 +557,125 @@
     };
   }
 
+  async function ensureChatFileAsset(
+    chatId: string,
+    currentChatKey: CryptoKey,
+    fileId: string,
+    metadata: ChatFileMetadata,
+    updatedAt: number
+  ) {
+    const existingAsset = fileAssetById[fileId];
+    if (existingAsset && existingAsset.updatedAt === updatedAt) {
+      return existingAsset;
+    }
+
+    const cachedAsset = await getCachedFile(fileId, updatedAt);
+    if (cachedAsset) {
+      fileAssetById = {
+        ...fileAssetById,
+        [fileId]: cachedAsset
+      };
+      return cachedAsset;
+    }
+
+    const downloadedContent = await api.files.downloadChatFileContent(chatId, fileId);
+    const decryptedContent = await cryptoLib.decryptBinary(currentChatKey, downloadedContent.content);
+    const blob = new Blob([Uint8Array.from(decryptedContent).buffer], {
+      type: metadata.type || 'application/octet-stream'
+    });
+
+    const asset = await cacheFile(fileId, blob, {
+      type: metadata.type || 'application/octet-stream',
+      name: metadata.name,
+      updatedAt: downloadedContent.updatedAt
+    });
+
+    fileAssetById = {
+      ...fileAssetById,
+      [fileId]: asset
+    };
+
+    return asset;
+  }
+
   function estimateStoredFileSize(file: File) {
     const metadataBytes = new TextEncoder().encode(JSON.stringify(buildFileMetadata(file)));
     return file.size + metadataBytes.length + 56;
   }
 
+  async function openImageLibrary() {
+    if (!selectedChat?.id || !chatKey) {
+      error = 'Ключ чата недоступен';
+      return;
+    }
+
+    showImageLibraryModal = true;
+    loadingImageLibrary = true;
+
+    try {
+      let allMetadata = chatFileMetadataByChatId[selectedChat.id];
+      if (!allMetadata) {
+        const downloadedMetadata = await api.files.downloadChatFilesMetadata(selectedChat.id);
+        allMetadata = Object.fromEntries(
+          downloadedMetadata
+            .filter((item) => item.fileId)
+            .map((item) => [item.fileId as string, item])
+        );
+        chatFileMetadataByChatId = {
+          ...chatFileMetadataByChatId,
+          [selectedChat.id]: allMetadata
+        };
+        metadataLoadedChatIds = new Set([...metadataLoadedChatIds, selectedChat.id]);
+      }
+
+      const favoriteIds = new Set(getFavoriteChatImageIds(selectedChat.id));
+      const nextItems = await Promise.all(
+        Object.values(allMetadata).map(async (metadataEntry) => {
+          if (!metadataEntry.fileId || metadataEntry.deletedAt) {
+            return null;
+          }
+
+          const decryptedMetadataBytes = await cryptoLib.decryptBinary(
+            chatKey,
+            cryptoLib.base64ToBytes(metadataEntry.metadataBase64)
+          );
+          const metadataText = new TextDecoder().decode(decryptedMetadataBytes);
+          const metadata = parseFileMetadataJson(metadataText);
+          if (!metadata || !metadata.type.startsWith('image/')) {
+            return null;
+          }
+
+          const asset = await ensureChatFileAsset(
+            selectedChat.id,
+            chatKey,
+            metadataEntry.fileId,
+            metadata,
+            metadataEntry.updatedAt
+          ).catch(() => null);
+
+          return {
+            fileId: metadataEntry.fileId,
+            previewUrl: asset?.objectUrl ?? null,
+            metadata,
+            updatedAt: metadataEntry.updatedAt,
+            isFavorite: favoriteIds.has(metadataEntry.fileId)
+          };
+        })
+      );
+
+      imageLibraryItems = nextItems
+        .filter((item): item is NonNullable<(typeof nextItems)[number]> => Boolean(item))
+        .sort((left, right) => Number(right.isFavorite) - Number(left.isFavorite) || right.updatedAt - left.updatedAt);
+    } catch (exception) {
+      error = exception instanceof Error ? exception.message : 'Не удалось загрузить изображения чата';
+    } finally {
+      loadingImageLibrary = false;
+    }
+  }
+
   async function handleSendMessage() {
     clearError();
-    if ((!newMessage.trim() && pendingAttachments.length === 0) || sending || !chatKey) return;
+    if ((!newMessage.trim() && pendingAttachments.length === 0 && selectedReusableAttachments.length === 0) || sending || !chatKey) return;
 
     sending = true;
     pendingAttachments = pendingAttachments.map((attachment) => ({ ...attachment, uploading: true }));
@@ -478,9 +711,13 @@
         });
       }
 
-      await chats.sendMessage(params.id, newMessage, uploadedFileIds);
+      await chats.sendMessage(params.id, newMessage, [
+        ...selectedReusableAttachments.map((attachment) => attachment.fileId),
+        ...uploadedFileIds
+      ]);
       newMessage = '';
       pendingAttachments = [];
+      selectedReusableAttachments = [];
       shouldStickToBottom = true;
       requestAnimationFrame(() => {
         if (messagesContainer) {
@@ -557,8 +794,46 @@
     }
   }
 
+  function toggleReusableImage(fileId: string) {
+    const item = imageLibraryItems.find((entry) => entry.fileId === fileId);
+    if (!item) return;
+
+    const existing = selectedReusableAttachments.find((attachment) => attachment.fileId === fileId);
+    if (existing) {
+      selectedReusableAttachments = selectedReusableAttachments.filter((attachment) => attachment.fileId !== fileId);
+      return;
+    }
+
+    selectedReusableAttachments = [
+      ...selectedReusableAttachments,
+      {
+        id: `reuse:${fileId}`,
+        fileId,
+        name: item.metadata.name,
+        size: item.metadata.size
+      }
+    ];
+  }
+
+  function toggleFavoriteReusableImage(fileId: string) {
+    if (!selectedChat?.id) return;
+
+    const nextFavorites = new Set(toggleFavoriteChatImage(selectedChat.id, fileId));
+    imageLibraryItems = imageLibraryItems
+      .map((item) => ({
+        ...item,
+        isFavorite: nextFavorites.has(item.fileId)
+      }))
+      .sort((left, right) => Number(right.isFavorite) - Number(left.isFavorite) || right.updatedAt - left.updatedAt);
+  }
+
   function handleRemoveAttachment(attachmentId: string) {
     clearError();
+    if (attachmentId.startsWith('reuse:')) {
+      selectedReusableAttachments = selectedReusableAttachments.filter((attachment) => attachment.id !== attachmentId);
+      return;
+    }
+
     pendingAttachments = pendingAttachments.filter((attachment) => attachment.id !== attachmentId);
   }
 
@@ -847,10 +1122,42 @@
     }
   }
 
+  async function handleRenameChat() {
+    if (!selectedChat?.id || !renameChatValue.trim() || renamingChat) return;
+
+    renamingChat = true;
+    try {
+      await chats.renameChat(selectedChat.id, renameChatValue);
+      showRenameChatModal = false;
+    } catch (exception) {
+      error = exception instanceof Error ? exception.message : 'Не удалось изменить название чата';
+    } finally {
+      renamingChat = false;
+    }
+  }
+
+  async function handleChatAvatarSave(event: CustomEvent<{ blob: Blob }>) {
+    if (!selectedChat?.id) return;
+
+    updatingChatAvatar = true;
+    try {
+      await chats.updateChatAvatar(selectedChat.id, event.detail.blob);
+      showChatAvatarModal = false;
+      pendingChatAvatarFile = null;
+    } catch (exception) {
+      error = exception instanceof Error ? exception.message : 'Не удалось обновить аватар чата';
+    } finally {
+      updatingChatAvatar = false;
+    }
+  }
+
   $: if (params.id && params.id !== loadedChatId) {
     loadedChatId = params.id;
     clearError();
     pendingAttachments = [];
+    selectedReusableAttachments = [];
+    imageLibraryItems = [];
+    showImageLibraryModal = false;
     resetFileCaches();
     chats
       .ensureChatLoaded(params.id)
@@ -882,26 +1189,25 @@
   });
 </script>
 
-<div class="chat-container">
-  <header>
-    <h2>
-      {#if selectedChat?.type === 'pm' && otherUserName}
-        {otherUserName}
-      {:else}
-        {selectedChat?.name || 'Чат'}
-      {/if}
-    </h2>
-    {#if chatKey}
-      <div class="header-actions">
-        <button class="icon-btn" type="button" on:click={() => (showMembersModal = true)} title="Участники">👥</button>
-        {#if isCreator && selectedChat?.type === 'gm'}
-          <button class="icon-btn" type="button" on:click={() => (showAddMemberModal = true)} title="Добавить участника">+</button>
-        {:else if selectedChat?.type === 'gm'}
-          <button class="icon-btn leave-btn" type="button" on:click={handleLeaveChat} title="Покинуть чат">←</button>
-        {/if}
-      </div>
-    {/if}
-  </header>
+<div
+  class="chat-container"
+  role="region"
+  aria-label="Область чата"
+  on:dragenter={handleDragEnter}
+  on:dragover={handleDragOver}
+  on:dragleave={handleDragLeave}
+  on:drop={handleDrop}
+>
+  <button
+    class="chat-header-btn"
+    type="button"
+    on:click={() => (showMembersModal = true)}
+    aria-label="Открыть информацию о чате"
+  >
+    <div class="chat-header-text">
+      <h2>{chatDisplayName}</h2>
+    </div>
+  </button>
 
   {#if !selectedChat?.isHydrated && !messages.length}
     <div class="loading">Загрузка...</div>
@@ -944,12 +1250,14 @@
     <MessageInput
       bind:value={newMessage}
       disabled={sending || !chatKey}
-      attachments={pendingAttachments}
+      attachments={composerAttachments}
       attachmentsDisabled={sending || !chatKey}
+      dragActive={isDragActive}
       {sending}
       on:submit={handleSendMessage}
       on:pickfiles={(event) => handleFilePick(event.detail.files)}
       on:removeattachment={(event) => handleRemoveAttachment(event.detail.id)}
+      on:openlibrary={openImageLibrary}
     />
 
     {#if editingMessage}
@@ -990,7 +1298,24 @@
     </div>
     <button class="context-menu-overlay" type="button" on:click={closeContextMenu} aria-label="Закрыть меню"></button>
   {/if}
+
+  {#if isDragActive}
+    <div class="drop-overlay" aria-hidden="true">
+      <div class="drop-overlay-card">
+        <strong>Отпустите файлы, чтобы прикрепить</strong>
+        <span>Файлы будут добавлены во вложения к сообщению</span>
+      </div>
+    </div>
+  {/if}
 </div>
+
+<input
+  id="chatAvatarInput"
+  class="hidden-input"
+  type="file"
+  accept="image/jpeg,image/png,image/webp"
+  on:change={handleChatAvatarFileChange}
+/>
 
 {#if showAddMemberModal}
   <div class="modal-shell">
@@ -1034,14 +1359,95 @@
   </div>
 {/if}
 
+{#if showImageLibraryModal}
+  <ChatImagePickerModal
+    items={imageLibraryItems}
+    selectedFileIds={selectedReusableAttachments.map((attachment) => attachment.fileId)}
+    loading={loadingImageLibrary}
+    on:close={() => (showImageLibraryModal = false)}
+    on:toggle={(event) => toggleReusableImage(event.detail.fileId)}
+    on:favorite={(event) => toggleFavoriteReusableImage(event.detail.fileId)}
+  />
+{/if}
+
+{#if showChatAvatarModal && pendingChatAvatarFile}
+  <AvatarCropModal
+    file={pendingChatAvatarFile}
+    uploading={updatingChatAvatar}
+    on:close={() => {
+      showChatAvatarModal = false;
+      pendingChatAvatarFile = null;
+    }}
+    on:save={handleChatAvatarSave}
+  />
+{/if}
+
+{#if showRenameChatModal}
+  <div class="modal-shell">
+    <button
+      class="modal-overlay"
+      type="button"
+      aria-label="Закрыть окно изменения названия чата"
+      on:click={() => {
+        showRenameChatModal = false;
+        renameChatValue = chatDisplayName;
+      }}
+    ></button>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="rename-chat-title">
+      <h3 id="rename-chat-title">Изменить название чата</h3>
+      <div class="field">
+        <label for="renameChatInput">Название</label>
+        <input
+          id="renameChatInput"
+          type="text"
+          bind:value={renameChatValue}
+          maxlength="30"
+          placeholder="Введите название чата"
+        />
+      </div>
+      <div class="modal-actions">
+        <button
+          type="button"
+          on:click={() => {
+            showRenameChatModal = false;
+            renameChatValue = chatDisplayName;
+          }}
+        >
+          Отмена
+        </button>
+        <button type="button" class="primary-action" disabled={renamingChat || !renameChatValue.trim()} on:click={handleRenameChat}>
+          {renamingChat ? 'Сохранение...' : 'Сохранить'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if showMembersModal}
   <MembersModal
     members={selectedChat?.members ?? []}
     {isCreator}
+    {canAddMembers}
     chatType={selectedChat?.type ?? 'gm'}
     currentUserId={$auth.user?.id}
+    chatName={chatDisplayName}
+    chatAvatarUrl={chatDisplayAvatarUrl}
     on:close={() => (showMembersModal = false)}
     on:deleteChat={handleDeleteChat}
+    on:leaveChat={handleLeaveChat}
+    on:addMember={() => {
+      showMembersModal = false;
+      showAddMemberModal = true;
+    }}
+    on:editAvatar={() => {
+      showMembersModal = false;
+      openChatAvatarPicker();
+    }}
+    on:editName={() => {
+      renameChatValue = chatDisplayName;
+      showMembersModal = false;
+      showRenameChatModal = true;
+    }}
     on:remove={(event) => removeMember(event.detail.userId)}
   />
 {/if}
@@ -1052,20 +1458,73 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    position: relative;
   }
 
-  header {
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0 24px 104px;
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.08), rgba(15, 23, 42, 0.04));
+    pointer-events: none;
+  }
+
+  .drop-overlay-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 22px 28px;
+    border: 2px dashed #2563eb;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.96);
+    color: #0f172a;
+    box-shadow: 0 18px 42px rgba(15, 23, 42, 0.16);
+    text-align: center;
+  }
+
+  .drop-overlay-card strong {
+    font-size: 17px;
+  }
+
+  .drop-overlay-card span {
+    font-size: 13px;
+    color: #64748b;
+  }
+
+  .chat-header-btn {
     padding: 16px 24px;
     border-bottom: 1px solid #e0e0e0;
     display: flex;
     align-items: center;
-    gap: 12px;
+    width: 100%;
+    background: white;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .chat-header-btn:hover {
+    background: #f8fafc;
+  }
+
+  .chat-header-text {
+    min-width: 0;
   }
 
   h2 {
     margin: 0;
-    font-size: 18px;
+    font-size: 17px;
     font-weight: 600;
+  }
+
+  .chat-header-btn:hover h2 {
+    color: #2563eb;
   }
 
   .loading {
@@ -1109,29 +1568,6 @@
 
   .error-toast-close:hover {
     background: rgba(255, 255, 255, 0.24);
-  }
-
-  .header-actions {
-    display: flex;
-    gap: 8px;
-    margin-left: auto;
-  }
-
-  .icon-btn {
-    width: 36px;
-    height: 36px;
-    border: none;
-    border-radius: 8px;
-    background: #f0f0f0;
-    cursor: pointer;
-    font-size: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .icon-btn:hover {
-    background: #e0e0e0;
   }
 
   .edit-area {
@@ -1307,6 +1743,15 @@
     display: flex;
     justify-content: flex-end;
     margin-top: 20px;
+  }
+
+  .modal-actions .primary-action {
+    background: #0f172a;
+    color: white;
+  }
+
+  .hidden-input {
+    display: none;
   }
 </style>
 

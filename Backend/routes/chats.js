@@ -38,14 +38,29 @@ function broadcastToChatMembers(chatId, eventType, data, excludeUserId = null) {
   });
 }
 
+function mapChatRow(chat) {
+  return {
+    id: chat.id,
+    type: chat.type,
+    name: chat.name,
+    createdBy: chat.created_by,
+    createdAt: chat.created_at,
+    memberCount: chat.member_count,
+    avatarFileId: chat.avatar_file_id ?? null,
+    avatarUpdatedAt: chat.avatar_updated_at ?? null
+  };
+}
+
 router.get('/', authenticate, (req, res) => {
   try {
     const chats = db.prepare(`
-      SELECT c.id, c.type, c.name, c.created_by, c.created_at,
+      SELECT c.id, c.type, c.name, c.created_by, c.created_at, c.avatar_file_id,
+        f.updated_at AS avatar_updated_at,
         (SELECT COUNT(*) FROM chat_members WHERE chat_id = c.id) as member_count,
         cm.last_read_at
       FROM chats c
       JOIN chat_members cm ON c.id = cm.chat_id
+      LEFT JOIN files f ON f.id = c.avatar_file_id
       WHERE cm.user_id = ?
       ORDER BY c.created_at DESC
     `).all(req.userId);
@@ -68,12 +83,7 @@ router.get('/', authenticate, (req, res) => {
       }
       
       return {
-        id: chat.id,
-        type: chat.type,
-        name: chat.name,
-        createdBy: chat.created_by,
-        createdAt: chat.created_at,
-        memberCount: chat.member_count,
+        ...mapChatRow(chat),
         unreadCount,
         firstUnreadId
       };
@@ -96,6 +106,15 @@ router.post('/', authenticate, (req, res) => {
     
     if (!encryptedKey) {
       return res.status(400).json({ error: 'encryptedKey is required' });
+    }
+
+    const providedNameLength = Number(req.body.nameLength ?? 0);
+    if (type === 'gm' && (!name || !providedNameLength)) {
+      return res.status(400).json({ error: 'Encrypted group chat name is required' });
+    }
+
+    if (providedNameLength > 30) {
+      return res.status(400).json({ error: 'Chat name exceeds 30 characters' });
     }
     
     if (type === 'pm') {
@@ -167,6 +186,8 @@ router.post('/', authenticate, (req, res) => {
       name,
       createdBy: req.userId,
       createdAt: Math.floor(Date.now() / 1000),
+      avatarFileId: null,
+      avatarUpdatedAt: null,
       members: members.map(m => ({
         id: m.id,
         username: m.username,
@@ -182,7 +203,13 @@ router.post('/', authenticate, (req, res) => {
 
 router.get('/:chatId', authenticate, (req, res) => {
   try {
-    const chat = db.prepare('SELECT id, type, name, created_by, created_at FROM chats WHERE id = ?').get(req.params.chatId);
+    const chat = db.prepare(`
+      SELECT c.id, c.type, c.name, c.created_by, c.created_at, c.avatar_file_id,
+        f.updated_at AS avatar_updated_at
+      FROM chats c
+      LEFT JOIN files f ON f.id = c.avatar_file_id
+      WHERE c.id = ?
+    `).get(req.params.chatId);
     
     if (!chat) {
       return res.status(404).json({ error: 'Chat not found' });
@@ -206,6 +233,8 @@ router.get('/:chatId', authenticate, (req, res) => {
       name: chat.name,
       createdBy: chat.created_by,
       createdAt: chat.created_at,
+      avatarFileId: chat.avatar_file_id ?? null,
+      avatarUpdatedAt: chat.avatar_updated_at ?? null,
       members: members.map(m => ({
         id: m.id,
         username: m.username,
@@ -548,6 +577,122 @@ router.post('/:chatId/typing', authenticate, (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Typing event error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.patch('/:chatId', authenticate, (req, res) => {
+  try {
+    const { name, nameLength } = req.body;
+
+    const chat = db.prepare('SELECT id, type, created_by FROM chats WHERE id = ?').get(req.params.chatId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    if (chat.type !== 'gm') {
+      return res.status(400).json({ error: 'Only group chats can be updated' });
+    }
+
+    if (chat.created_by !== req.userId) {
+      return res.status(403).json({ error: 'Only creator can update group chat' });
+    }
+
+    if (typeof name !== 'string' || !name) {
+      return res.status(400).json({ error: 'Encrypted chat name is required' });
+    }
+
+    const normalizedNameLength = Number(nameLength ?? 0);
+    if (!normalizedNameLength || normalizedNameLength > 30) {
+      return res.status(400).json({ error: 'Chat name exceeds 30 characters' });
+    }
+
+    db.prepare('UPDATE chats SET name = ? WHERE id = ?').run(name, req.params.chatId);
+
+    const updatedChat = db.prepare(`
+      SELECT c.id, c.type, c.name, c.created_by, c.created_at, c.avatar_file_id,
+        f.updated_at AS avatar_updated_at,
+        (SELECT COUNT(*) FROM chat_members WHERE chat_id = c.id) as member_count
+      FROM chats c
+      LEFT JOIN files f ON f.id = c.avatar_file_id
+      WHERE c.id = ?
+    `).get(req.params.chatId);
+
+    broadcastToChatMembers(req.params.chatId, 'chat_updated', {
+      chatId: req.params.chatId,
+      changes: ['name']
+    });
+
+    res.json(mapChatRow(updatedChat));
+  } catch (err) {
+    console.error('Update chat error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/:chatId/avatar', authenticate, (req, res) => {
+  try {
+    const { fileId } = req.body;
+
+    const chat = db.prepare('SELECT id, type, created_by FROM chats WHERE id = ?').get(req.params.chatId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    if (chat.type !== 'gm') {
+      return res.status(400).json({ error: 'Only group chats can have avatar' });
+    }
+
+    if (chat.created_by !== req.userId) {
+      return res.status(403).json({ error: 'Only creator can update group chat avatar' });
+    }
+
+    let avatarFileId = null;
+    if (fileId !== null && fileId !== undefined) {
+      if (typeof fileId !== 'string' || !fileId) {
+        return res.status(400).json({ error: 'fileId must be a non-empty string or null' });
+      }
+
+      const file = db.prepare(`
+        SELECT id, chat_id, uploaded_by, deleted_at
+        FROM files
+        WHERE id = ?
+      `).get(fileId);
+
+      if (!file || file.chat_id !== req.params.chatId) {
+        return res.status(404).json({ error: 'File not found' });
+      }
+
+      if (file.uploaded_by !== req.userId) {
+        return res.status(403).json({ error: 'Only own file can be used as chat avatar' });
+      }
+
+      if (file.deleted_at) {
+        return res.status(400).json({ error: 'Placeholder file cannot be used as chat avatar' });
+      }
+
+      avatarFileId = file.id;
+    }
+
+    db.prepare('UPDATE chats SET avatar_file_id = ? WHERE id = ?').run(avatarFileId, req.params.chatId);
+
+    const updatedChat = db.prepare(`
+      SELECT c.id, c.type, c.name, c.created_by, c.created_at, c.avatar_file_id,
+        f.updated_at AS avatar_updated_at,
+        (SELECT COUNT(*) FROM chat_members WHERE chat_id = c.id) as member_count
+      FROM chats c
+      LEFT JOIN files f ON f.id = c.avatar_file_id
+      WHERE c.id = ?
+    `).get(req.params.chatId);
+
+    broadcastToChatMembers(req.params.chatId, 'chat_updated', {
+      chatId: req.params.chatId,
+      changes: ['avatar']
+    });
+
+    res.json(mapChatRow(updatedChat));
+  } catch (err) {
+    console.error('Update chat avatar error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

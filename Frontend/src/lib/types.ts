@@ -58,6 +58,9 @@ export interface Chat {
   type: ChatType;
   name: string | null;
   memberCount: number;
+  avatarFileId?: string | null;
+  avatarUpdatedAt?: number | null;
+  avatarUrl?: string | null;
   createdBy?: string;
   createdAt?: number;
   members?: ChatMember[];
@@ -100,6 +103,7 @@ export interface ChatMessagesResponse {
 export interface CreateChatRequest {
   type: ChatType;
   name?: string;
+  nameLength?: number;
   members?: string[];
   encryptedKey: string;
   memberKeys?: Record<string, string>;

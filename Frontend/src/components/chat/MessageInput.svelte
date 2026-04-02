@@ -6,11 +6,13 @@
   export let sending = false;
   export let attachments: Array<{ id: string; name: string; size: number; uploading?: boolean }> = [];
   export let attachmentsDisabled = false;
+  export let dragActive = false;
 
   const dispatch = createEventDispatcher<{
     submit: void;
     pickfiles: { files: File[] };
     removeattachment: { id: string };
+    openlibrary: void;
   }>();
 
   let fileInput: HTMLInputElement | null = null;
@@ -18,6 +20,11 @@
   function openFilePicker() {
     if (attachmentsDisabled) return;
     fileInput?.click();
+  }
+
+  function openLibrary() {
+    if (attachmentsDisabled) return;
+    dispatch('openlibrary');
   }
 
   function handleFileChange(event: Event) {
@@ -28,12 +35,26 @@
     }
     input.value = '';
   }
+
+  function handlePaste(event: ClipboardEvent) {
+    if (attachmentsDisabled) return;
+
+    const clipboardFiles = Array.from(event.clipboardData?.files ?? []);
+    if (clipboardFiles.length > 0) {
+      event.preventDefault();
+      dispatch('pickfiles', { files: clipboardFiles });
+    }
+  }
 </script>
 
-<form class="input-area" on:submit|preventDefault={() => dispatch('submit')}>
+<form class="input-area" class:drag-active={dragActive} on:submit|preventDefault={() => dispatch('submit')}>
   <input bind:this={fileInput} class="file-input" type="file" multiple on:change={handleFileChange} />
   <button class="attach-btn" type="button" on:click={openFilePicker} disabled={attachmentsDisabled} title="Прикрепить файл">
     +
+  </button>
+  <button class="library-btn" type="button" on:click={openLibrary} disabled={attachmentsDisabled} title="Выбрать из файлов чата">
+    <span class="library-icon" aria-hidden="true">🖼</span>
+    <span class="library-label">Из чата</span>
   </button>
   <input
     id="messageInput"
@@ -41,6 +62,7 @@
     bind:value
     placeholder="Введите сообщение..."
     disabled={disabled}
+    on:paste={handlePaste}
   />
   <button type="submit" disabled={disabled || (!value.trim() && attachments.length === 0)}>
     {sending ? '...' : 'Отправить'}
@@ -81,9 +103,18 @@
     gap: 12px;
     padding: 16px 24px;
     border-top: 1px solid #e0e0e0;
+    transition:
+      background 0.18s ease,
+      box-shadow 0.18s ease;
   }
 
-  .attach-btn {
+  .input-area.drag-active {
+    background: linear-gradient(180deg, rgba(219, 234, 254, 0.92), rgba(239, 246, 255, 0.98));
+    box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.22);
+  }
+
+  .attach-btn,
+  .library-btn {
     width: 44px;
     min-width: 44px;
     border-radius: 22px;
@@ -91,7 +122,43 @@
     background: #eef2f7;
     color: #334155;
     cursor: pointer;
+    line-height: 1;
+    transition:
+      background 0.18s ease,
+      color 0.18s ease,
+      transform 0.18s ease;
+  }
+
+  .input-area.drag-active .attach-btn,
+  .input-area.drag-active .library-btn {
+    background: #dbeafe;
+    color: #1d4ed8;
+    transform: translateY(-1px);
+  }
+
+  .attach-btn {
     font-size: 22px;
+  }
+
+  .library-btn {
+    width: auto;
+    min-width: 98px;
+    padding: 0 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .library-icon {
+    font-size: 18px;
+    line-height: 1;
+  }
+
+  .library-label {
     line-height: 1;
   }
 
@@ -101,11 +168,21 @@
     border: 1px solid #ddd;
     border-radius: 24px;
     font-size: 15px;
+    transition:
+      border-color 0.18s ease,
+      box-shadow 0.18s ease,
+      background 0.18s ease;
   }
 
   input:focus {
     outline: none;
     border-color: #4caf50;
+  }
+
+  .input-area.drag-active input {
+    border-color: #2563eb;
+    background: white;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
   }
 
   button {
@@ -128,7 +205,8 @@
     cursor: not-allowed;
   }
 
-  .attach-btn:disabled {
+  .attach-btn:disabled,
+  .library-btn:disabled {
     background: #e5e7eb;
     color: #9ca3af;
   }

@@ -33,10 +33,15 @@
       {#each chats as chat}
         <a href="#/chats/{chat.id}" class="chat-item" class:selected={selectedChatId === chat.id}>
           {#if chat.type === 'pm'}
-            <Avatar name={chat.otherUser?.username || 'Личный чат'} src={chat.otherUser?.avatarUrl} size={44} />
+            {#key `${chat.id}:${chat.otherUser?.avatarUrl ?? ''}`}
+              <Avatar name={chat.otherUser?.username || 'Личный чат'} src={chat.otherUser?.avatarUrl} size={44} />
+            {/key}
           {:else}
-            <div class="chat-icon">{(chat.name || 'G').charAt(0).toUpperCase()}</div>
+            {#key `${chat.id}:${chat.avatarUrl ?? ''}`}
+              <Avatar name={chat.name || 'Групповой чат'} src={chat.avatarUrl} size={44} />
+            {/key}
           {/if}
+
           <div class="chat-info">
             <div class="chat-name">
               {chat.type === 'pm' ? (chat.otherUser?.username || 'Личный чат') : (chat.name || 'Групповой чат')}
@@ -44,6 +49,7 @@
                 <span class="unread-badge">{chat.unreadCount}</span>
               {/if}
             </div>
+
             <div class="chat-meta">
               {#if chat.lastMessage}
                 {#if chat.lastMessage.isSystem}
@@ -139,20 +145,6 @@
 
   .chat-item.selected {
     background: #e3f2fd;
-  }
-
-  .chat-icon {
-    width: 44px;
-    height: 44px;
-    background: #4caf50;
-    color: white;
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 600;
-    font-size: 16px;
-    flex-shrink: 0;
   }
 
   .chat-info {

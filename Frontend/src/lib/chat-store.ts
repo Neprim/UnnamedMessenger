@@ -2,12 +2,15 @@ import { get, writable } from 'svelte/store';
 import { api } from './api';
 import { auth } from './auth-store';
 import * as crypto from './crypto';
+import { cacheFile, getCachedFile } from './file-cache';
 import {
   buildLastMessage,
+  decryptChatName,
   decryptMessageForDisplay,
   decryptMessagesForDisplay,
   getOtherUser,
   isSystemMessage,
+  parseFileMetadataJson,
   parseSystemMessage
 } from './chat-helpers';
 import type { Chat, ChatMessagesResponse, CreateChatRequest, MemberEventPayload, Message } from './types';
@@ -116,6 +119,45 @@ function createChatsStore() {
     return authState;
   };
 
+  const resolveChatAvatarUrl = async (
+    chatId: string,
+    avatarFileId: string | null | undefined,
+    avatarUpdatedAt: number | null | undefined,
+    chatKey: CryptoKey | null
+  ) => {
+    if (!avatarFileId || !avatarUpdatedAt || !chatKey) {
+      return null;
+    }
+
+    const cachedAsset = await getCachedFile(avatarFileId, avatarUpdatedAt);
+    if (cachedAsset) {
+      return cachedAsset.objectUrl;
+    }
+
+    try {
+      const metadataResponse = await api.files.downloadChatFileMetadata(chatId, avatarFileId);
+      const decryptedMetadataBytes = await crypto.decryptBinary(chatKey, crypto.base64ToBytes(metadataResponse.metadataBase64));
+      const metadataText = new TextDecoder().decode(decryptedMetadataBytes);
+      const metadata = parseFileMetadataJson(metadataText);
+
+      const contentResponse = await api.files.downloadChatFileContent(chatId, avatarFileId);
+      const decryptedContent = await crypto.decryptBinary(chatKey, contentResponse.content);
+      const blob = new Blob([Uint8Array.from(decryptedContent).buffer], {
+        type: metadata?.type || 'image/webp'
+      });
+
+      const asset = await cacheFile(avatarFileId, blob, {
+        type: metadata?.type || 'image/webp',
+        name: metadata?.name || 'chat-avatar.webp',
+        updatedAt: contentResponse.updatedAt
+      });
+
+      return asset.objectUrl;
+    } catch {
+      return null;
+    }
+  };
+
   const resolveChatKey = async (chatDetail: Chat, existingChatKey?: CryptoKey | null) => {
     if (existingChatKey) {
       return existingChatKey;
@@ -146,6 +188,13 @@ function createChatsStore() {
     const chatKey = await resolveChatKey(chatDetail, currentChat?.chatKey ?? null);
 
     let messages: Message[] = currentChat?.messages ?? [];
+    const decryptedName = await decryptChatName(chatDetail, chatKey);
+    const avatarUrl = await resolveChatAvatarUrl(
+      chatDetail.id,
+      chatDetail.avatarFileId ?? null,
+      chatDetail.avatarUpdatedAt ?? null,
+      chatKey
+    );
     if (chatKey) {
       try {
         const messagesResult = await api.chats.getMessages(chatDetail.id, { limit: SIDEBAR_PREVIEW_MESSAGES_LIMIT });
@@ -163,9 +212,11 @@ function createChatsStore() {
     return {
       ...currentChat,
       ...chatDetail,
+      name: decryptedName,
       memberCount,
       members,
       unreadCount,
+      avatarUrl,
       otherUser: getOtherUser(chatDetail, authState.user?.id),
       lastMessage: buildLastMessage(messages, members),
       messages,
@@ -222,6 +273,14 @@ function createChatsStore() {
     return nextChat;
   };
 
+  const refreshChatInternal = async (chatId: string) => {
+    const existingChat = findChat(chatId);
+    return ensureChatLoaded(chatId, {
+      force: true,
+      limit: Math.max(existingChat?.messages?.length ?? 0, INITIAL_CHAT_MESSAGES_LIMIT)
+    });
+  };
+
   return {
     subscribe,
     set,
@@ -246,11 +305,7 @@ function createChatsStore() {
     },
     ensureChatLoaded,
     refreshChat: async (chatId: string) => {
-      const existingChat = findChat(chatId);
-      return ensureChatLoaded(chatId, {
-        force: true,
-        limit: Math.max(existingChat?.messages?.length ?? 0, INITIAL_CHAT_MESSAGES_LIMIT)
-      });
+      return refreshChatInternal(chatId);
     },
     loadOlderMessages: async (chatId: string, limit = 50) => {
       const chat = findChat(chatId);
@@ -381,7 +436,8 @@ function createChatsStore() {
       const members = data.type === 'pm' && data.selectedUserId ? [data.selectedUserId] : [];
       const result = await api.chats.create({
         type: data.type,
-        name: data.type === 'gm' ? data.name : undefined,
+        name: data.type === 'gm' && data.name ? await crypto.encryptMessage(chatKey, data.name.trim()) : undefined,
+        nameLength: data.type === 'gm' && data.name ? data.name.trim().length : undefined,
         encryptedKey,
         memberKeys,
         members
@@ -391,6 +447,61 @@ function createChatsStore() {
       const hydratedChat = await hydrateChat(chatDetail, 0, chatDetail.memberCount ?? members.length + 1);
       upsertChat(hydratedChat);
       return hydratedChat;
+    },
+    renameChat: async (chatId: string, nextName: string) => {
+      const chat = await ensureChatLoaded(chatId);
+      if (!chat?.chatKey) {
+        throw new Error('Chat key is not available');
+      }
+
+      const trimmedName = nextName.trim();
+      if (!trimmedName) {
+        throw new Error('Название чата не может быть пустым');
+      }
+
+      if (trimmedName.length > 30) {
+        throw new Error('Название чата не должно превышать 30 символов');
+      }
+
+      await api.chats.update(chatId, {
+        name: await crypto.encryptMessage(chat.chatKey, trimmedName),
+        nameLength: trimmedName.length
+      });
+
+      updateChatById(chatId, { name: trimmedName });
+      return refreshChatInternal(chatId);
+    },
+    updateChatAvatar: async (chatId: string, avatarBlob: Blob) => {
+      const chat = await ensureChatLoaded(chatId);
+      if (!chat?.chatKey) {
+        throw new Error('Chat key is not available');
+      }
+
+      const metadata = {
+        name: 'chat-avatar.webp',
+        type: avatarBlob.type || 'image/webp',
+        size: avatarBlob.size
+      };
+      const fileBytes = new Uint8Array(await avatarBlob.arrayBuffer());
+      const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
+      const encryptedContent = await crypto.encryptBinary(chat.chatKey, fileBytes);
+      const encryptedMetadata = await crypto.encryptBinary(chat.chatKey, metadataBytes);
+
+      const uploaded = await api.files.uploadChatFile(chatId, encryptedContent, crypto.bytesToBase64(encryptedMetadata));
+
+      try {
+        await cacheFile(uploaded.file.id, avatarBlob, {
+          type: metadata.type,
+          name: metadata.name,
+          updatedAt: uploaded.file.updatedAt
+        });
+        await api.chats.updateAvatar(chatId, uploaded.file.id);
+      } catch (error) {
+        await api.files.deleteChatFile(chatId, uploaded.file.id).catch(() => {});
+        throw error;
+      }
+
+      return refreshChatInternal(chatId);
     },
     addMember: async (chatId: string, userId: string, publicKey: string) => {
       const chat = await ensureChatLoaded(chatId);
