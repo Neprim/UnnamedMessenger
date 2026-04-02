@@ -7,6 +7,8 @@
   import * as crypto from '../lib/crypto';
   import ChatSidebar from '../components/chat/ChatSidebar.svelte';
   import CreateChatModal from '../components/chat/CreateChatModal.svelte';
+  import Avatar from '../components/common/Avatar.svelte';
+  import AvatarCropModal from '../components/settings/AvatarCropModal.svelte';
   import ChatView from './ChatView.svelte';
   import type { SearchUserResult } from '../lib/types';
 
@@ -19,8 +21,10 @@
   let showExportKeyModal = false;
   let showPasswordModal = false;
   let showDeleteAccountModal = false;
+  let showAvatarModal = false;
   let exportConfirmChecked = false;
   let exportingKey = false;
+  let uploadingAvatar = false;
   let newUsername = '';
   let updatingUsername = false;
   let newPassword = '';
@@ -38,6 +42,7 @@
   let searchResults: SearchUserResult[] = [];
   let searching = false;
   let selectedUserId: string | null = null;
+  let pendingAvatarFile: File | null = null;
 
   let unsubscribeMemberEvent: (() => void) | undefined;
   let unsubscribeChatDeleted: (() => void) | undefined;
@@ -143,6 +148,55 @@
       newUsername = '';
     } finally {
       updatingUsername = false;
+    }
+  }
+
+  function openAvatarPicker() {
+    document.getElementById('avatarInput')?.click();
+  }
+
+  function handleAvatarFileChange(event: Event) {
+    const target = event.target as HTMLInputElement;
+    const file = target.files?.[0];
+    target.value = '';
+
+    if (!file) return;
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      alert('Поддерживаются только JPEG, PNG и WebP.');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Размер файла не должен превышать 5 МБ.');
+      return;
+    }
+
+    pendingAvatarFile = file;
+    showAvatarModal = true;
+    showSettingsModal = false;
+  }
+
+  async function handleAvatarSave(event: CustomEvent<{ blob: Blob }>) {
+    uploadingAvatar = true;
+    try {
+      const { avatarUrl, avatarUpdatedAt } = await api.users.uploadAvatar(event.detail.blob);
+      auth.updateUser({ avatarUrl, avatarUpdatedAt });
+      showAvatarModal = false;
+      pendingAvatarFile = null;
+    } catch (exception) {
+      alert(exception instanceof Error ? exception.message : 'Не удалось обновить аватар');
+    } finally {
+      uploadingAvatar = false;
+    }
+  }
+
+  async function handleDeleteAvatar() {
+    try {
+      await api.users.deleteAvatar();
+      auth.updateUser({ avatarUrl: null, avatarUpdatedAt: null });
+    } catch (exception) {
+      alert(exception instanceof Error ? exception.message : 'Не удалось удалить аватар');
     }
   }
 
@@ -269,6 +323,7 @@
 </script>
 
 <div class="layout">
+  <input id="avatarInput" class="hidden-input" type="file" accept="image/jpeg,image/png,image/webp" on:change={handleAvatarFileChange} />
   <ChatSidebar chats={$chats} {loading} {selectedChatId} on:create={() => (showCreateModal = true)} on:settings={() => (showSettingsModal = true)} />
 
   <main class="main">
@@ -304,14 +359,35 @@
   />
 {/if}
 
+{#if showAvatarModal && pendingAvatarFile}
+  <AvatarCropModal
+    file={pendingAvatarFile}
+    uploading={uploadingAvatar}
+    on:close={() => {
+      showAvatarModal = false;
+      pendingAvatarFile = null;
+    }}
+    on:save={handleAvatarSave}
+  />
+{/if}
+
 {#if showSettingsModal}
   <div class="modal-shell">
     <button class="modal-overlay" type="button" on:click={() => (showSettingsModal = false)} aria-label="Закрыть окно"></button>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <h3 id="settings-title">Настройки</h3>
+      <div class="profile-preview">
+        <Avatar name={$auth.user?.username || 'U'} src={$auth.user?.avatarUrl} size={72} />
+        <div class="profile-meta">
+          <strong>{$auth.user?.username}</strong>
+          <div class="profile-actions">
+            <button class="settings-btn" type="button" on:click={openAvatarPicker}>Изменить аватар</button>
+            <button class="settings-btn" type="button" disabled={!$auth.user?.avatarUrl} on:click={handleDeleteAvatar}>Удалить аватар</button>
+          </div>
+        </div>
+      </div>
       <div class="settings-list">
         <button class="settings-btn" on:click={() => { showUsernameModal = true; showSettingsModal = false; }}>Изменить имя пользователя</button>
-        <button class="settings-btn" disabled>Изменить аватар</button>
         <button class="settings-btn" on:click={() => { showPasswordModal = true; showSettingsModal = false; }}>Изменить пароль</button>
         <button class="settings-btn" on:click={() => { showExportKeyModal = true; showSettingsModal = false; }}>Экспорт приватного ключа</button>
         <button class="settings-btn" on:click={handleLogout}>Выйти из аккаунта</button>
@@ -521,6 +597,28 @@
     gap: 10px;
   }
 
+  .profile-preview {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px;
+    border-radius: 14px;
+    background: #f7faf7;
+    margin-bottom: 18px;
+  }
+
+  .profile-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .profile-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
   .settings-btn {
     padding: 14px 18px;
     border: 1px solid #e0e0e0;
@@ -589,5 +687,9 @@
   .danger-action {
     background: #d32f2f;
     color: white;
+  }
+
+  .hidden-input {
+    display: none;
   }
 </style>

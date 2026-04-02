@@ -3,6 +3,13 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { authenticate } = require('../middleware/auth');
 const sse = require('../sse');
+const { getAvatarUrl } = require('../utils/avatar');
+const {
+  validateAttachableFileIds,
+  setMessageFileIds,
+  getMessageFileIdsMap,
+  mapMessageRow
+} = require('../utils/message-files');
 
 const router = express.Router();
 
@@ -16,18 +23,10 @@ function createSystemMessage(chatId, eventType, data) {
   ).run(messageId, chatId, content, timestamp);
   
   const message = db.prepare(
-    'SELECT id, chat_id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE id = ?'
+    'SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE id = ?'
   ).get(messageId);
-  
-  return {
-    id: message.id,
-    chatId: message.chat_id,
-    senderId: null,
-    content: message.content,
-    fileIds: message.file_ids ? JSON.parse(message.file_ids) : [],
-    timestamp: message.timestamp,
-    editedAt: message.edited_at
-  };
+
+  return mapMessageRow(message);
 }
 
 function broadcastToChatMembers(chatId, eventType, data, excludeUserId = null) {
@@ -156,7 +155,7 @@ router.post('/', authenticate, (req, res) => {
     createSystemMessage(chatId, 'chat_created', {});
     
     members = db.prepare(`
-      SELECT u.id, u.username, cm.encrypted_chat_key
+      SELECT u.id, u.username, u.avatar_updated_at, cm.encrypted_chat_key
       FROM chat_members cm
       JOIN users u ON cm.user_id = u.id
       WHERE cm.chat_id = ?
@@ -171,6 +170,7 @@ router.post('/', authenticate, (req, res) => {
       members: members.map(m => ({
         id: m.id,
         username: m.username,
+        avatarUrl: getAvatarUrl(m.id, m.avatar_updated_at),
         encryptedKey: m.encrypted_chat_key
       }))
     });
@@ -194,7 +194,7 @@ router.get('/:chatId', authenticate, (req, res) => {
     }
     
     const members = db.prepare(`
-      SELECT u.id, u.username, cm.encrypted_chat_key
+      SELECT u.id, u.username, u.avatar_updated_at, cm.encrypted_chat_key
       FROM chat_members cm
       JOIN users u ON cm.user_id = u.id
       WHERE cm.chat_id = ?
@@ -209,6 +209,7 @@ router.get('/:chatId', authenticate, (req, res) => {
       members: members.map(m => ({
         id: m.id,
         username: m.username,
+        avatarUrl: getAvatarUrl(m.id, m.avatar_updated_at),
         encryptedKey: m.encrypted_chat_key
       }))
     });
@@ -452,7 +453,7 @@ router.get('/:chatId/messages', authenticate, (req, res) => {
       // Load N messages BEFORE cursor
       const cursorMsg = db.prepare('SELECT timestamp FROM messages WHERE id = ?').get(cursor);
       if (cursorMsg) {
-        const query = 'SELECT id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE chat_id = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT ?';
+        const query = 'SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE chat_id = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT ?';
         messages = db.prepare(query).all(req.params.chatId, cursorMsg.timestamp, beforeCntNum + 1);
         hasMoreBefore = messages.length > beforeCntNum;
         if (hasMoreBefore) messages.pop();
@@ -462,14 +463,14 @@ router.get('/:chatId/messages', authenticate, (req, res) => {
       // Load N messages AFTER cursor
       const cursorMsg = db.prepare('SELECT timestamp FROM messages WHERE id = ?').get(cursor);
       if (cursorMsg) {
-        const query = 'SELECT id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE chat_id = ? AND timestamp > ? ORDER BY timestamp ASC LIMIT ?';
+        const query = 'SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE chat_id = ? AND timestamp > ? ORDER BY timestamp ASC LIMIT ?';
         messages = db.prepare(query).all(req.params.chatId, cursorMsg.timestamp, afterCntNum + 1);
         hasMoreAfter = messages.length > afterCntNum;
         if (hasMoreAfter) messages.pop();
       }
     } else {
       // Default: load last N messages
-      let query = 'SELECT id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE chat_id = ?';
+      let query = 'SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE chat_id = ?';
       const params = [req.params.chatId];
       
       if (cursor) {
@@ -507,15 +508,10 @@ router.get('/:chatId/messages', authenticate, (req, res) => {
       }
     }
     
+    const fileIdsByMessage = getMessageFileIdsMap(messages.map((message) => message.id));
+
     res.json({
-      messages: messages.map(m => ({
-        id: m.id,
-        senderId: m.sender_id,
-        content: m.content,
-        fileIds: m.file_ids ? JSON.parse(m.file_ids) : [],
-        timestamp: m.timestamp,
-        editedAt: m.edited_at
-      })),
+      messages: messages.map((message) => mapMessageRow(message, fileIdsByMessage)),
       hasMoreBefore,
       hasMoreAfter,
       firstUnreadId,
@@ -558,7 +554,15 @@ router.post('/:chatId/typing', authenticate, (req, res) => {
 
 router.post('/:chatId/messages', authenticate, (req, res) => {
   try {
-    const { content, fileIds } = req.body;
+    const { content } = req.body;
+    const fileValidation = validateAttachableFileIds(req.params.chatId, req.body.fileIds);
+    if (!fileValidation.ok) {
+      return res.status(400).json({
+        error: fileValidation.error,
+        invalidFileIds: fileValidation.invalidFileIds
+      });
+    }
+    const fileIds = fileValidation.fileIds;
     
     const chat = db.prepare('SELECT id FROM chats WHERE id = ?').get(req.params.chatId);
     if (!chat) {
@@ -580,21 +584,20 @@ router.post('/:chatId/messages', authenticate, (req, res) => {
     
     const messageId = uuidv4();
     
-    db.prepare('INSERT INTO messages (id, chat_id, sender_id, content, file_ids) VALUES (?, ?, ?, ?, ?)').run(messageId, req.params.chatId, req.userId, content || null, fileIds ? JSON.stringify(fileIds) : null);
-    
-    const message = db.prepare('SELECT id, sender_id, content, file_ids, timestamp FROM messages WHERE id = ?').get(messageId);
+    db.prepare('INSERT INTO messages (id, chat_id, sender_id, content) VALUES (?, ?, ?, ?)').run(
+      messageId,
+      req.params.chatId,
+      req.userId,
+      content || null
+    );
+    setMessageFileIds(messageId, fileIds);
+
+    const message = db.prepare('SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE id = ?').get(messageId);
     
     // Mark sender's messages as read
     db.prepare('UPDATE chat_members SET last_read_at = ? WHERE chat_id = ? AND user_id = ?').run(message.timestamp, req.params.chatId, req.userId);
     
-    const response = {
-      id: message.id,
-      chatId: req.params.chatId,
-      senderId: message.sender_id,
-      content: message.content,
-      fileIds: message.file_ids ? JSON.parse(message.file_ids) : [],
-      timestamp: message.timestamp
-    };
+    const response = mapMessageRow(message);
     
     broadcastToChatMembers(req.params.chatId, 'new_message', response, req.userId);
     

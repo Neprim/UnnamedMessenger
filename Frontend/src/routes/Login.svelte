@@ -24,7 +24,7 @@
     error = '';
 
     try {
-      const { salt, id, token, publicKey } = await api.auth.login({ username, password });
+      const { salt, id, token, publicKey, avatarUrl, avatarUpdatedAt } = await api.auth.login({ username, password });
       
       setToken(token);
       sessionStorage.setItem('token', token);
@@ -49,7 +49,7 @@
         sessionStorage.setItem('privateKey', privateKeyBase64);
 
         auth.setUser(
-          { id, username, publicKey },
+          { id, username, publicKey, avatarUrl, avatarUpdatedAt },
           privateKey
         );
 

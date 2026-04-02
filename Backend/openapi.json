@@ -82,6 +82,26 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "salt": {
+                      "type": "string"
+                    },
+                    "publicKey": {
+                      "type": "string"
+                    },
+                    "avatarUpdatedAt": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "avatarUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "token": {
                       "type": "string"
                     }
@@ -137,6 +157,14 @@
                     },
                     "publicKey": {
                       "type": "string"
+                    },
+                    "avatarUpdatedAt": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "avatarUrl": {
+                      "type": "string",
+                      "nullable": true
                     }
                   }
                 }
@@ -182,6 +210,125 @@
             "description": "Unauthorized"
           }
         }
+      },
+      "delete": {
+        "summary": "Delete current user account",
+        "tags": ["Users"],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Account deleted successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/users/me/avatar": {
+      "post": {
+        "summary": "Upload or replace current user's avatar",
+        "tags": ["Users"],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Avatar uploaded successfully"
+          },
+          "400": {
+            "description": "Invalid avatar"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete current user's avatar",
+        "tags": ["Users"],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Avatar deleted successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/users/{userId}/avatar": {
+      "get": {
+        "summary": "Get user avatar",
+        "tags": ["Users"],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Avatar image",
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Avatar not found"
+          }
+        }
       }
     },
     "/users/search": {
@@ -215,6 +362,10 @@
                     "properties": {
                       "id": {
                         "type": "string"
+                      },
+                      "avatarUrl": {
+                        "type": "string",
+                        "nullable": true
                       },
                       "username": {
                         "type": "string"
@@ -637,13 +788,13 @@
                     "type": "string",
                     "description": "Text content (max 10000 chars)"
                   },
-"fileIds": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            },
-                            "description": "Array of file IDs to attach"
-                          }
+                  "fileIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Array of file IDs to attach. Every file must exist and belong to the same chat."
+                  }
                 }
               }
             }
@@ -654,7 +805,39 @@
             "description": "Message sent successfully"
           },
           "400": {
-            "description": "Invalid input or limit exceeded"
+            "description": "Invalid input, message limit exceeded, or some fileIds do not exist / do not belong to this chat"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Chat not found"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/typing": {
+      "post": {
+        "summary": "Broadcast typing activity to other chat members",
+        "tags": ["Chats"],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Typing event sent"
           },
           "401": {
             "description": "Unauthorized"
@@ -700,7 +883,7 @@
                     "items": {
                       "type": "string"
                     },
-                    "description": "Array of file IDs to attach (replace existing)"
+                    "description": "Array of file IDs to attach (replace existing). Every file must exist and belong to the same chat."
                   }
                 }
               }
@@ -712,7 +895,7 @@
             "description": "Message edited successfully"
           },
           "400": {
-            "description": "Invalid input or limit exceeded"
+            "description": "Invalid input, message limit exceeded, or some fileIds do not exist / do not belong to this chat"
           },
           "401": {
             "description": "Unauthorized"
@@ -761,7 +944,7 @@
     },
     "/chats/{chatId}/files": {
       "get": {
-        "summary": "Get list of files in chat",
+        "summary": "Get chat files",
         "tags": ["Files"],
         "security": [
           {
@@ -780,34 +963,13 @@
         ],
         "responses": {
           "200": {
-            "description": "List of files",
+            "description": "List of files in chat",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string"
-                      },
-                      "name": {
-                        "type": "string"
-                      },
-                      "size": {
-                        "type": "integer"
-                      },
-                      "type": {
-                        "type": "string"
-                      },
-                      "uploadedBy": {
-                        "type": "string"
-                      },
-                      "uploadedAt": {
-                        "type": "string",
-                        "format": "date-time"
-                      }
-                    }
+                    "$ref": "#/components/schemas/FileRecord"
                   }
                 }
               }
@@ -816,13 +978,13 @@
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Chat not found"
+          "403": {
+            "description": "Access denied"
           }
         }
       },
       "post": {
-        "summary": "Upload a file to chat",
+        "summary": "Upload encrypted file to chat",
         "tags": ["Files"],
         "security": [
           {
@@ -837,47 +999,68 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "x-file-metadata",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Base64-encoded encrypted file metadata"
           }
         ],
         "requestBody": {
           "required": true,
           "content": {
-            "multipart/form-data": {
+            "application/octet-stream": {
               "schema": {
-                "type": "object",
-                "required": ["file"],
-                "properties": {
-                  "file": {
-                    "type": "string",
-                    "format": "binary"
-                  }
-                }
+                "type": "string",
+                "format": "binary"
               }
             }
           }
         },
         "responses": {
           "201": {
-            "description": "File uploaded successfully"
+            "description": "File uploaded successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "file": {
+                      "$ref": "#/components/schemas/FileRecord"
+                    },
+                    "quotaBytes": {
+                      "type": "integer"
+                    },
+                    "usedBytes": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
           },
           "400": {
-            "description": "Invalid input or size limit exceeded"
+            "description": "Invalid file content or metadata"
           },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Chat not found"
+          "403": {
+            "description": "Access denied"
           },
-          "507": {
-            "description": "Storage limit exceeded (100MB)"
+          "409": {
+            "description": "File quota exceeded"
           }
         }
       }
     },
     "/chats/{chatId}/files/{fileId}": {
       "get": {
-        "summary": "Download a file from chat",
+        "summary": "Download encrypted file from chat",
         "tags": ["Files"],
         "security": [
           {
@@ -904,7 +1087,30 @@
         ],
         "responses": {
           "200": {
-            "description": "File data",
+            "description": "Encrypted file content",
+            "headers": {
+              "X-File-Size": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-File-Updated-At": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-File-Created-At": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-File-Deleted-At": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Present when file is replaced with placeholder"
+              }
+            },
             "content": {
               "application/octet-stream": {
                 "schema": {
@@ -917,13 +1123,16 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "Access denied"
+          },
           "404": {
             "description": "File not found"
           }
         }
       },
       "delete": {
-        "summary": "Delete a file from chat",
+        "summary": "Delete file from chat",
         "tags": ["Files"],
         "security": [
           {
@@ -950,13 +1159,167 @@
         ],
         "responses": {
           "200": {
-            "description": "File deleted successfully"
+            "description": "File deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "fileId": {
+                      "type": "string"
+                    },
+                    "quotaBytes": {
+                      "type": "integer"
+                    },
+                    "usedBytes": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "File not found"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/files/metadata": {
+      "get": {
+        "summary": "Get encrypted metadata for all chat files",
+        "tags": ["Files"],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Encrypted metadata for all files in chat",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "fileId": {
+                        "type": "string"
+                      },
+                      "metadata": {
+                        "type": "string",
+                        "description": "Base64-encoded encrypted metadata"
+                      },
+                      "size": {
+                        "type": "integer"
+                      },
+                      "createdAt": {
+                        "type": "integer"
+                      },
+                      "updatedAt": {
+                        "type": "integer"
+                      },
+                      "deletedAt": {
+                        "type": ["integer", "null"]
+                      }
+                    },
+                    "required": ["fileId", "metadata", "size", "createdAt", "updatedAt", "deletedAt"]
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
           },
           "403": {
-            "description": "Not allowed to delete this file"
+            "description": "Access denied"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/files/{fileId}/metadata": {
+      "get": {
+        "summary": "Get encrypted file metadata from chat",
+        "tags": ["Files"],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Encrypted file metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "fileId": {
+                      "type": "string"
+                    },
+                    "metadata": {
+                      "type": "string",
+                      "description": "Base64-encoded encrypted metadata"
+                    },
+                    "size": {
+                      "type": "integer"
+                    },
+                    "createdAt": {
+                      "type": "integer"
+                    },
+                    "updatedAt": {
+                      "type": "integer"
+                    },
+                    "deletedAt": {
+                      "type": ["integer", "null"]
+                    }
+                  },
+                  "required": ["fileId", "metadata", "size", "createdAt", "updatedAt", "deletedAt"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Access denied"
           },
           "404": {
             "description": "File not found"
@@ -966,7 +1329,7 @@
     },
     "/files/me": {
       "get": {
-        "summary": "Get all files uploaded by current user",
+        "summary": "Get current user's files and quota",
         "tags": ["Files"],
         "security": [
           {
@@ -975,32 +1338,34 @@
         ],
         "responses": {
           "200": {
-            "description": "List of user's files",
+            "description": "Current user's files",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string"
-                      },
-                      "chatId": {
-                        "type": "string"
-                      },
-                      "name": {
-                        "type": "string"
-                      },
-                      "size": {
-                        "type": "integer"
-                      },
-                      "type": {
-                        "type": "string"
-                      },
-                      "uploadedAt": {
-                        "type": "string",
-                        "format": "date-time"
+                  "type": "object",
+                  "properties": {
+                    "quotaBytes": {
+                      "type": "integer"
+                    },
+                    "usedBytes": {
+                      "type": "integer"
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/FileRecord"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "isAvatar": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        ]
                       }
                     }
                   }
@@ -1016,7 +1381,7 @@
     },
     "/files/me/{fileId}": {
       "delete": {
-        "summary": "Delete a file globally (replaced with placeholder)",
+        "summary": "Delete own file completely",
         "tags": ["Files"],
         "security": [
           {
@@ -1033,32 +1398,106 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "File deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "fileId": {
+                      "type": "string"
+                    },
+                    "quotaBytes": {
+                      "type": "integer"
+                    },
+                    "usedBytes": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "File not found"
+          }
+        }
+      }
+    },
+    "/files/me/{fileId}/placeholder": {
+      "put": {
+        "summary": "Replace own file with placeholder",
+        "tags": ["Files"],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-file-metadata",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Base64-encoded encrypted placeholder metadata"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": {
+            "application/octet-stream": {
               "schema": {
-                "type": "object",
-                "required": ["placeholder"],
-                "properties": {
-                  "placeholder": {
-                    "type": "string",
-                    "description": "Encoded placeholder image (max 4KB, 24x24)"
-                  }
-                }
+                "type": "string",
+                "format": "binary"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "File deleted and replaced with placeholder"
+            "description": "File replaced with placeholder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "file": {
+                      "$ref": "#/components/schemas/FileRecord"
+                    },
+                    "quotaBytes": {
+                      "type": "integer"
+                    },
+                    "usedBytes": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid placeholder content or metadata"
           },
           "401": {
             "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Not allowed to delete this file"
           },
           "404": {
             "description": "File not found"
@@ -1068,6 +1507,35 @@
     }
   },
   "components": {
+    "schemas": {
+      "FileRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "uploadedBy": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          },
+          "deletedAt": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      }
+    },
     "securitySchemes": {
       "cookieAuth": {
         "type": "apiKey",

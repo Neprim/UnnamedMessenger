@@ -1,11 +1,13 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { onDestroy, tick } from 'svelte';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
+  import * as cryptoLib from '../lib/crypto';
+  import { cacheFile, getCachedFile, invalidateCachedFile, type CachedFileAsset } from '../lib/file-cache';
   import MessageList from '../components/chat/MessageList.svelte';
   import MessageInput from '../components/chat/MessageInput.svelte';
   import MembersModal from '../components/chat/MembersModal.svelte';
-  import { isSystemMessage } from '../lib/chat-helpers';
+  import { formatFileSize, isSystemMessage, parseFileMetadataJson } from '../lib/chat-helpers';
   import type { ChatMember, Message, SearchUserResult } from '../lib/types';
 
   export let params: { id: string };
@@ -31,14 +33,35 @@
   let editingText = '';
   let messagesContainer: HTMLDivElement | undefined;
   let scrollTimeout: ReturnType<typeof setTimeout> | null = null;
+  let errorTimeout: ReturnType<typeof setTimeout> | null = null;
   let loadedChatId: string | null = null;
   let pendingReadCheckForChatId: string | null = null;
   let shouldStickToBottom = true;
   let previousMessageCount = 0;
   let lastTypingSentAt = 0;
   let lastObservedTypingValue = '';
+  let pendingAttachments: PendingAttachment[] = [];
+  let fileDisplayById: Record<
+    string,
+    {
+      status: 'loading' | 'ready' | 'missing' | 'error';
+      name?: string;
+      type?: string;
+      size?: number;
+      sizeLabel?: string;
+      deletedAt?: number | null;
+    }
+  > = {};
+  let fileAssetById: Record<string, CachedFileAsset> = {};
+  let chatFileMetadataByChatId: Record<
+    string,
+    Record<string, Awaited<ReturnType<typeof api.files.downloadChatFilesMetadata>>[number]>
+  > = {};
+  let metadataLoadedChatIds = new Set<string>();
+  let fileMetadataGeneration = 0;
 
   const TYPING_THROTTLE_MS = 3000;
+  const ERROR_TOAST_DURATION_MS = 4000;
 
   $: selectedChat = $chats.find((chat) => chat.id === params.id) ?? chatDetail;
   $: messages = selectedChat?.messages ?? [];
@@ -49,6 +72,8 @@
   $: typingMemberNames = (selectedChat?.typingUsers ?? [])
     .map((entry) => selectedChat?.members?.find((member) => member.id === entry.userId)?.username)
     .filter((username): username is string => Boolean(username));
+  $: memberAvatarUrls = Object.fromEntries((selectedChat?.members ?? []).map((member) => [member.id, member.avatarUrl ?? null]));
+  $: visibleFileIds = Array.from(new Set(messages.flatMap((message) => message.fileIds)));
 
   type MessageGroup = {
     senderId: string;
@@ -56,6 +81,56 @@
     messages: Message[];
     isSystem: boolean;
   };
+
+  type PendingAttachment = {
+    id: string;
+    name: string;
+    size: number;
+    file: File;
+    estimatedStoredSize: number;
+    uploading?: boolean;
+  };
+
+  function rememberChatFileMetadata(
+    chatId: string,
+    metadata: Awaited<ReturnType<typeof api.files.downloadChatFileMetadata>>
+  ) {
+    const fileId = metadata.fileId;
+    if (!fileId) return;
+
+    chatFileMetadataByChatId = {
+      ...chatFileMetadataByChatId,
+      [chatId]: {
+        ...(chatFileMetadataByChatId[chatId] ?? {}),
+        [fileId]: metadata
+      }
+    };
+  }
+
+  function forgetChatFileMetadata(chatId: string, fileId: string) {
+    const currentChatMetadata = chatFileMetadataByChatId[chatId];
+    if (!currentChatMetadata?.[fileId]) return;
+
+    const nextChatMetadata = { ...currentChatMetadata };
+    delete nextChatMetadata[fileId];
+
+    chatFileMetadataByChatId = {
+      ...chatFileMetadataByChatId,
+      [chatId]: nextChatMetadata
+    };
+  }
+
+  function revokeFileAsset(fileId: string) {
+    const nextAssets = { ...fileAssetById };
+    delete nextAssets[fileId];
+    fileAssetById = nextAssets;
+  }
+
+  function resetFileCaches() {
+    fileMetadataGeneration += 1;
+    fileAssetById = {};
+    fileDisplayById = {};
+  }
 
   function handleContainerScroll() {
     if (!messagesContainer || !selectedChat) return;
@@ -215,6 +290,12 @@
       }
     }
   }
+  $: if (selectedChat?.id && chatKey && visibleFileIds.length > 0) {
+    loadVisibleFileMetadata(selectedChat.id, chatKey, visibleFileIds).catch(() => {});
+  }
+  $: if (visibleFileIds.length === 0 && Object.keys(fileDisplayById).length > 0) {
+    resetFileCaches();
+  }
 
   async function handleDeleteFromMenu() {
     if (contextMenu.messageId) {
@@ -246,13 +327,79 @@
     editingText = '';
   }
 
+  function clearError() {
+    if (errorTimeout) {
+      clearTimeout(errorTimeout);
+      errorTimeout = null;
+    }
+    error = '';
+  }
+
+  $: if (error) {
+    if (errorTimeout) {
+      clearTimeout(errorTimeout);
+    }
+
+    errorTimeout = setTimeout(() => {
+      error = '';
+      errorTimeout = null;
+    }, ERROR_TOAST_DURATION_MS);
+  }
+
+  function buildFileMetadata(file: File) {
+    return {
+      name: file.name,
+      type: file.type || 'application/octet-stream',
+      size: file.size
+    };
+  }
+
+  function estimateStoredFileSize(file: File) {
+    const metadataBytes = new TextEncoder().encode(JSON.stringify(buildFileMetadata(file)));
+    return file.size + metadataBytes.length + 56;
+  }
+
   async function handleSendMessage() {
-    if (!newMessage.trim() || sending) return;
+    clearError();
+    if ((!newMessage.trim() && pendingAttachments.length === 0) || sending || !chatKey) return;
 
     sending = true;
+    pendingAttachments = pendingAttachments.map((attachment) => ({ ...attachment, uploading: true }));
+    const uploadedFileIds: string[] = [];
+    const locallyCachedFileIds: string[] = [];
     try {
-      await chats.sendMessage(params.id, newMessage);
+      for (const attachment of pendingAttachments) {
+        const fileBytes = new Uint8Array(await attachment.file.arrayBuffer());
+        const fileMetadata = buildFileMetadata(attachment.file);
+        const metadataBytes = new TextEncoder().encode(JSON.stringify(fileMetadata));
+        const encryptedContent = await cryptoLib.encryptBinary(chatKey, fileBytes);
+        const encryptedMetadata = await cryptoLib.encryptBinary(chatKey, metadataBytes);
+        const uploaded = await api.files.uploadChatFile(
+          params.id,
+          encryptedContent,
+          cryptoLib.bytesToBase64(encryptedMetadata)
+        );
+
+        uploadedFileIds.push(uploaded.file.id);
+        locallyCachedFileIds.push(uploaded.file.id);
+        rememberChatFileMetadata(params.id, {
+          fileId: uploaded.file.id,
+          metadataBase64: cryptoLib.bytesToBase64(encryptedMetadata),
+          size: uploaded.file.size,
+          updatedAt: uploaded.file.updatedAt,
+          createdAt: uploaded.file.createdAt,
+          deletedAt: uploaded.file.deletedAt
+        });
+        await cacheFile(uploaded.file.id, attachment.file, {
+          type: fileMetadata.type,
+          name: fileMetadata.name,
+          updatedAt: uploaded.file.updatedAt
+        });
+      }
+
+      await chats.sendMessage(params.id, newMessage, uploadedFileIds);
       newMessage = '';
+      pendingAttachments = [];
       shouldStickToBottom = true;
       requestAnimationFrame(() => {
         if (messagesContainer) {
@@ -261,6 +408,12 @@
         (document.getElementById('messageInput') as HTMLInputElement | null)?.focus();
       });
     } catch (exception) {
+      if (uploadedFileIds.length > 0) {
+        await Promise.allSettled(uploadedFileIds.map((fileId) => api.files.deleteChatFile(params.id, fileId)));
+      }
+      await Promise.allSettled(locallyCachedFileIds.map((fileId) => invalidateCachedFile(fileId)));
+      locallyCachedFileIds.forEach((fileId) => forgetChatFileMetadata(params.id, fileId));
+      pendingAttachments = pendingAttachments.map((attachment) => ({ ...attachment, uploading: false }));
       error = exception instanceof Error ? exception.message : 'Не удалось отправить сообщение';
     } finally {
       sending = false;
@@ -273,6 +426,280 @@
     } catch (exception) {
       error = exception instanceof Error ? exception.message : 'Не удалось удалить сообщение';
     }
+  }
+
+  async function handleFilePick(files: File[]) {
+    clearError();
+    let quota: Awaited<ReturnType<typeof api.files.listMine>>;
+    let reservedBytes = pendingAttachments.reduce((total, attachment) => total + attachment.estimatedStoredSize, 0);
+    const acceptedAttachments: PendingAttachment[] = [];
+    const rejectedFiles: string[] = [];
+    if (!selectedChat?.chatKey || !selectedChat.id) {
+      error = 'Ключ чата недоступен';
+      return;
+    }
+
+    try {
+      quota = await api.files.listMine();
+    } catch (exception) {
+      error = exception instanceof Error ? exception.message : 'Не удалось проверить квоту файлов';
+      return;
+    }
+
+    for (const file of files) {
+      const estimatedStoredSize = estimateStoredFileSize(file);
+      if (quota.usedBytes + reservedBytes + estimatedStoredSize > quota.quotaBytes) {
+        rejectedFiles.push(file.name);
+        continue;
+      }
+
+      reservedBytes += estimatedStoredSize;
+      acceptedAttachments.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        name: file.name,
+        size: file.size,
+        file,
+        estimatedStoredSize,
+        uploading: false
+      });
+    }
+
+    if (acceptedAttachments.length > 0) {
+      pendingAttachments = [...pendingAttachments, ...acceptedAttachments];
+    }
+
+    if (rejectedFiles.length > 0) {
+      error =
+        rejectedFiles.length === 1
+          ? `Недостаточно квоты для файла "${rejectedFiles[0]}"`
+          : `Недостаточно квоты для файлов: ${rejectedFiles.join(', ')}`;
+    }
+  }
+
+  function handleRemoveAttachment(attachmentId: string) {
+    clearError();
+    pendingAttachments = pendingAttachments.filter((attachment) => attachment.id !== attachmentId);
+  }
+
+  async function loadVisibleFileMetadata(chatId: string, currentChatKey: CryptoKey, fileIds: string[]) {
+    const generation = fileMetadataGeneration;
+    const nextMissingIds = fileIds.filter((fileId) => !fileDisplayById[fileId]);
+    const allowedIds = new Set(fileIds);
+
+    if (nextMissingIds.length === 0) {
+      Object.keys(fileAssetById)
+        .filter((fileId) => !allowedIds.has(fileId))
+        .forEach((fileId) => revokeFileAsset(fileId));
+      fileDisplayById = Object.fromEntries(
+        Object.entries(fileDisplayById).filter(([fileId]) => allowedIds.has(fileId))
+      );
+      return;
+    }
+
+    fileDisplayById = {
+      ...fileDisplayById,
+      ...Object.fromEntries(nextMissingIds.map((fileId) => [fileId, { status: 'loading' as const }]))
+    };
+
+    if (
+      !metadataLoadedChatIds.has(chatId) &&
+      nextMissingIds.some((fileId) => !chatFileMetadataByChatId[chatId]?.[fileId])
+    ) {
+      try {
+        const chatFilesMetadata = await api.files.downloadChatFilesMetadata(chatId);
+        if (generation !== fileMetadataGeneration || selectedChat?.id !== chatId) {
+          return;
+        }
+
+        chatFileMetadataByChatId = {
+          ...chatFileMetadataByChatId,
+          [chatId]: Object.fromEntries(
+            chatFilesMetadata
+              .filter((item) => item.fileId)
+              .map((item) => [item.fileId as string, item])
+          )
+        };
+        metadataLoadedChatIds = new Set([...metadataLoadedChatIds, chatId]);
+      } catch (exception) {
+        if (generation !== fileMetadataGeneration || selectedChat?.id !== chatId) {
+          return;
+        }
+
+        const message = exception instanceof Error ? exception.message : 'Не удалось загрузить файл';
+        fileDisplayById = {
+          ...fileDisplayById,
+          ...Object.fromEntries(
+            nextMissingIds.map((fileId) => [fileId, { status: 'error' as const, name: message }])
+          )
+        };
+        return;
+      }
+    }
+
+    await Promise.all(
+      nextMissingIds.map(async (fileId) => {
+        try {
+          let downloadedMetadata = chatFileMetadataByChatId[chatId]?.[fileId];
+          if (!downloadedMetadata) {
+            downloadedMetadata = await api.files.downloadChatFileMetadata(chatId, fileId);
+            rememberChatFileMetadata(chatId, downloadedMetadata);
+          }
+
+          const decryptedMetadataBytes = await cryptoLib.decryptBinary(
+            currentChatKey,
+            cryptoLib.base64ToBytes(downloadedMetadata.metadataBase64)
+          );
+          const metadataText = new TextDecoder().decode(decryptedMetadataBytes);
+          const metadata = parseFileMetadataJson(metadataText);
+
+          if (generation !== fileMetadataGeneration || selectedChat?.id !== chatId) {
+            return;
+          }
+
+          if (!metadata) {
+            fileDisplayById = {
+              ...fileDisplayById,
+              [fileId]: { status: 'error', name: 'Некорректные метаданные' }
+            };
+            return;
+          }
+
+          fileDisplayById = {
+            ...fileDisplayById,
+            [fileId]: {
+              status: 'loading',
+              name: metadata.name,
+              type: metadata.type,
+              size: metadata.size,
+              sizeLabel: formatFileSize(metadata.size),
+              deletedAt: downloadedMetadata.deletedAt
+            }
+          };
+
+          const currentAsset = fileAssetById[fileId];
+          if (currentAsset && currentAsset.updatedAt === downloadedMetadata.updatedAt) {
+            fileDisplayById = {
+              ...fileDisplayById,
+              [fileId]: {
+                status: 'ready',
+                name: metadata.name,
+                type: metadata.type,
+                size: metadata.size,
+                sizeLabel: formatFileSize(metadata.size),
+                deletedAt: downloadedMetadata.deletedAt
+              }
+            };
+            return;
+          }
+
+          const cachedAsset = await getCachedFile(fileId, downloadedMetadata.updatedAt);
+          if (cachedAsset) {
+            if (generation !== fileMetadataGeneration || selectedChat?.id !== chatId) {
+              return;
+            }
+
+            fileAssetById = {
+              ...fileAssetById,
+              [fileId]: cachedAsset
+            };
+
+            fileDisplayById = {
+              ...fileDisplayById,
+              [fileId]: {
+                status: 'ready',
+                name: metadata.name,
+                type: metadata.type,
+                size: metadata.size,
+                sizeLabel: formatFileSize(metadata.size),
+                deletedAt: downloadedMetadata.deletedAt
+              }
+            };
+            return;
+          }
+
+          const downloadedContent = await api.files.downloadChatFileContent(chatId, fileId);
+          const decryptedContent = await cryptoLib.decryptBinary(currentChatKey, downloadedContent.content);
+
+          if (generation !== fileMetadataGeneration || selectedChat?.id !== chatId) {
+            return;
+          }
+
+          const blob = new Blob([Uint8Array.from(decryptedContent).buffer], {
+            type: metadata.type || 'application/octet-stream'
+          });
+          const cachedFileAsset = await cacheFile(fileId, blob, {
+            type: metadata.type || 'application/octet-stream',
+            name: metadata.name,
+            updatedAt: downloadedContent.updatedAt
+          });
+
+          fileAssetById = {
+            ...fileAssetById,
+            [fileId]: {
+              objectUrl: cachedFileAsset.objectUrl,
+              type: cachedFileAsset.type,
+              name: cachedFileAsset.name,
+              updatedAt: cachedFileAsset.updatedAt
+            }
+          };
+
+          fileDisplayById = {
+            ...fileDisplayById,
+            [fileId]: {
+              status: 'ready',
+              name: metadata.name,
+              type: metadata.type,
+              size: metadata.size,
+              sizeLabel: formatFileSize(metadata.size),
+              deletedAt: downloadedContent.deletedAt
+            }
+          };
+        } catch (exception) {
+          if (generation !== fileMetadataGeneration || selectedChat?.id !== chatId) {
+            return;
+          }
+
+          if (exception instanceof Error && exception.message === 'File not found') {
+            await invalidateCachedFile(fileId).catch(() => {});
+            forgetChatFileMetadata(chatId, fileId);
+          }
+
+          const message = exception instanceof Error ? exception.message : 'Не удалось загрузить файл';
+          fileDisplayById = {
+            ...fileDisplayById,
+            [fileId]:
+              message === 'File not found'
+                ? { status: 'missing', name: 'Файл удалён' }
+                : { status: 'error', name: 'Ошибка загрузки' }
+          };
+        }
+      })
+    );
+  }
+
+  function handleOpenFile(fileId: string) {
+    const asset = fileAssetById[fileId];
+    const display = fileDisplayById[fileId];
+    if (!asset || display?.status !== 'ready') {
+      return;
+    }
+
+    const isPreviewable =
+      asset.type.startsWith('image/') ||
+      asset.type === 'application/pdf' ||
+      asset.type.startsWith('text/');
+
+    if (isPreviewable) {
+      window.open(asset.objectUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    const link = document.createElement('a');
+    link.href = asset.objectUrl;
+    link.download = asset.name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   }
 
   async function searchUsers() {
@@ -341,6 +768,9 @@
 
   $: if (params.id && params.id !== loadedChatId) {
     loadedChatId = params.id;
+    clearError();
+    pendingAttachments = [];
+    resetFileCaches();
     chats
       .ensureChatLoaded(params.id)
       .then(() => {
@@ -366,6 +796,8 @@
 
   onDestroy(() => {
     if (scrollTimeout) clearTimeout(scrollTimeout);
+    if (errorTimeout) clearTimeout(errorTimeout);
+    resetFileCaches();
   });
 </script>
 
@@ -384,7 +816,7 @@
         {#if isCreator && selectedChat?.type === 'gm'}
           <button class="icon-btn" type="button" on:click={() => (showAddMemberModal = true)} title="Добавить участника">+</button>
         {:else if selectedChat?.type === 'gm'}
-          <button class="icon-btn leave-btn" type="button" on:click={handleLeaveChat} title="Покинуть чат">⇦</button>
+          <button class="icon-btn leave-btn" type="button" on:click={handleLeaveChat} title="Покинуть чат">←</button>
         {/if}
       </div>
     {/if}
@@ -392,16 +824,26 @@
 
   {#if !selectedChat?.isHydrated && !messages.length}
     <div class="loading">Загрузка...</div>
-  {:else if error}
-    <div class="error">{error}</div>
   {:else}
+    {#if error}
+      <div class="error-toast" role="alert" aria-live="assertive">
+        <span>{error}</span>
+        <button type="button" class="error-toast-close" on:click={clearError} aria-label="Закрыть ошибку">
+          ×
+        </button>
+      </div>
+    {/if}
+
     <MessageList
       bind:container={messagesContainer}
       {groupedMessages}
       currentUserId={$auth.user?.id}
       {showPlaceholder}
+      {memberAvatarUrls}
+      fileDisplayById={fileDisplayById}
       unreadMarkerId={selectedChat?.unreadMarkerId}
       on:scroll={handleContainerScroll}
+      on:fileclick={(event) => handleOpenFile(event.detail.fileId)}
       on:messagecontextmenu={(event) => handleContextMenu(event.detail.event, event.detail.messageId, event.detail.senderId)}
     />
 
@@ -417,7 +859,16 @@
       </div>
     {/if}
 
-    <MessageInput bind:value={newMessage} disabled={sending || !chatKey} {sending} on:submit={handleSendMessage} />
+    <MessageInput
+      bind:value={newMessage}
+      disabled={sending || !chatKey}
+      attachments={pendingAttachments}
+      attachmentsDisabled={sending || !chatKey}
+      {sending}
+      on:submit={handleSendMessage}
+      on:pickfiles={(event) => handleFilePick(event.detail.files)}
+      on:removeattachment={(event) => handleRemoveAttachment(event.detail.id)}
+    />
 
     {#if editingMessage}
       <div class="edit-area">
@@ -535,8 +986,7 @@
     font-weight: 600;
   }
 
-  .loading,
-  .error {
+  .loading {
     flex: 1;
     display: flex;
     align-items: center;
@@ -544,8 +994,39 @@
     color: #888;
   }
 
-  .error {
-    color: #f44336;
+  .error-toast {
+    position: absolute;
+    top: 72px;
+    right: 24px;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: min(420px, calc(100% - 48px));
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: rgba(127, 29, 29, 0.96);
+    color: white;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18);
+    font-size: 14px;
+  }
+
+  .error-toast-close {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.14);
+    color: white;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+  }
+
+  .error-toast-close:hover {
+    background: rgba(255, 255, 255, 0.24);
   }
 
   .header-actions {
@@ -746,3 +1227,4 @@
     margin-top: 20px;
   }
 </style>
+

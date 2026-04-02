@@ -4,11 +4,14 @@ export interface User {
   id: string;
   username: string;
   publicKey: string;
+  avatarUrl?: string | null;
+  avatarUpdatedAt?: number | null;
 }
 
 export interface ChatMember {
   id: string;
   username: string;
+  avatarUrl?: string | null;
   encryptedKey?: string;
   lastReadAt?: number;
 }
@@ -31,6 +34,25 @@ export interface Message {
   senderUsername?: string;
 }
 
+export interface ChatFileRecord {
+  id: string;
+  chatId: string;
+  uploadedBy: string;
+  size: number;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+export interface ChatFileMetadata {
+  name: string;
+  type: string;
+  size: number;
+  width?: number;
+  height?: number;
+  duration?: number;
+}
+
 export interface Chat {
   id: string;
   type: ChatType;
@@ -44,6 +66,7 @@ export interface Chat {
   otherUser?: {
     id: string;
     username: string;
+    avatarUrl?: string | null;
   } | null;
   unreadCount?: number;
   firstUnreadId?: string | null;
@@ -63,6 +86,7 @@ export interface SearchUserResult {
   id: string;
   username: string;
   publicKey: string;
+  avatarUrl?: string | null;
 }
 
 export interface ChatMessagesResponse {

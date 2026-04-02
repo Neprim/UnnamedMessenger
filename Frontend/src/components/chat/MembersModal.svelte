@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { ChatMember, ChatType } from '../../lib/types';
+  import Avatar from '../common/Avatar.svelte';
 
   export let members: ChatMember[] = [];
   export let isCreator = false;
@@ -21,7 +22,10 @@
     <div class="members-list">
       {#each members as member}
         <div class="member-item">
-          <span class="member-name">{member.username}</span>
+          <div class="member-main">
+            <Avatar name={member.username} src={member.avatarUrl} size={36} />
+            <span class="member-name">{member.username}</span>
+          </div>
           {#if isCreator && chatType === 'gm' && member.id !== currentUserId}
             <button class="remove-btn" type="button" on:click={() => dispatch('remove', { userId: member.id })}>Удалить</button>
           {/if}
@@ -84,10 +88,21 @@
     align-items: center;
     padding: 12px;
     border-bottom: 1px solid #eee;
+    gap: 12px;
+  }
+
+  .member-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
   }
 
   .member-name {
     font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .remove-btn {

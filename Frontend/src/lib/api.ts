@@ -1,6 +1,7 @@
 import type {
   Chat,
   ChatMessagesResponse,
+  ChatFileRecord,
   CreateChatRequest,
   Message,
   SearchUserResult
@@ -32,6 +33,29 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.json();
 }
 
+async function rawRequest(
+  path: string,
+  options: RequestInit & { contentType?: string; acceptJson?: boolean } = {}
+): Promise<Response> {
+  const { contentType, acceptJson = false, ...fetchOptions } = options;
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...fetchOptions,
+    headers: {
+      ...(contentType ? { 'Content-Type': contentType } : {}),
+      ...(acceptJson ? { Accept: 'application/json' } : {}),
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      ...fetchOptions.headers
+    }
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(error.error || 'Request failed');
+  }
+
+  return response;
+}
+
 export interface RegisterRequest {
   username: string;
   password: string;
@@ -55,6 +79,8 @@ export interface LoginResponse {
   username: string;
   salt: string;
   publicKey: string;
+  avatarUpdatedAt?: number | null;
+  avatarUrl?: string | null;
   token: string;
 }
 
@@ -62,7 +88,31 @@ export interface UserResponse {
   id: string;
   username: string;
   publicKey: string;
+  avatarUpdatedAt?: number | null;
+  avatarUrl?: string | null;
   createdAt: string;
+}
+
+export interface UserFilesResponse {
+  quotaBytes: number;
+  usedBytes: number;
+  files: Array<ChatFileRecord & { isAvatar?: boolean }>;
+}
+
+export interface DownloadedChatFileBase {
+  size: number;
+  updatedAt: number;
+  createdAt: number;
+  deletedAt: number | null;
+}
+
+export interface DownloadedChatFileMetadata extends DownloadedChatFileBase {
+  fileId?: string;
+  metadataBase64: string;
+}
+
+export interface DownloadedChatFileContent extends DownloadedChatFileBase {
+  content: Uint8Array;
 }
 
 export const api = {
@@ -88,6 +138,27 @@ export const api = {
 
     deleteMe: () =>
       request<{ success: boolean }>('/users/me', { method: 'DELETE' }),
+
+    uploadAvatar: async (avatar: Blob) => {
+      const response = await fetch(`${API_BASE}/users/me/avatar`, {
+        method: 'POST',
+        headers: {
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          'Content-Type': avatar.type
+        },
+        body: avatar
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Request failed' }));
+        throw new Error(error.error || 'Request failed');
+      }
+
+      return response.json() as Promise<{ avatarUpdatedAt: number; avatarUrl: string }>;
+    },
+
+    deleteAvatar: () =>
+      request<{ success: boolean }>('/users/me/avatar', { method: 'DELETE' }),
     
     search: (query: string) => 
       request<SearchUserResult[]>('/users/search?q=' + encodeURIComponent(query))
@@ -151,5 +222,95 @@ export const api = {
     
     delete: (messageId: string) => 
       request<{ message: string }>(`/messages/${messageId}`, { method: 'DELETE' })
+  },
+
+  files: {
+    listMine: () => request<UserFilesResponse>('/files/me'),
+
+    uploadChatFile: async (chatId: string, content: Uint8Array, metadataBase64: string) => {
+      const bodyBytes = Uint8Array.from(content);
+      const response = await rawRequest(`/files/${chatId}/files`, {
+        method: 'POST',
+        contentType: 'application/octet-stream',
+        headers: {
+          'x-file-metadata': metadataBase64
+        },
+        body: new Blob([bodyBytes.buffer], { type: 'application/octet-stream' })
+      });
+
+      return response.json() as Promise<{
+        file: ChatFileRecord;
+        quotaBytes: number;
+        usedBytes: number;
+      }>;
+    },
+
+    deleteChatFile: (chatId: string, fileId: string) =>
+      request<{ success: boolean; fileId: string; quotaBytes: number; usedBytes: number }>(
+        `/files/${chatId}/files/${fileId}`,
+        { method: 'DELETE' }
+      ),
+
+    downloadChatFileMetadata: async (chatId: string, fileId: string): Promise<DownloadedChatFileMetadata> => {
+      const response = await request<{
+        fileId: string;
+        metadata: string;
+        size: number;
+        updatedAt: number;
+        createdAt: number;
+        deletedAt: number | null;
+      }>(`/files/${chatId}/files/${fileId}/metadata`);
+
+      return {
+        fileId: response.fileId,
+        metadataBase64: response.metadata,
+        size: response.size,
+        updatedAt: response.updatedAt,
+        createdAt: response.createdAt,
+        deletedAt: response.deletedAt
+      };
+    },
+
+    downloadChatFilesMetadata: async (chatId: string): Promise<DownloadedChatFileMetadata[]> => {
+      const response = await request<
+        Array<{
+          fileId: string;
+          metadata: string;
+          size: number;
+          updatedAt: number;
+          createdAt: number;
+          deletedAt: number | null;
+        }>
+      >(`/files/${chatId}/files/metadata`);
+
+      return response.map((item) => ({
+        fileId: item.fileId,
+        metadataBase64: item.metadata,
+        size: item.size,
+        updatedAt: item.updatedAt,
+        createdAt: item.createdAt,
+        deletedAt: item.deletedAt
+      }));
+    },
+
+    downloadChatFileContent: async (chatId: string, fileId: string): Promise<DownloadedChatFileContent> => {
+      const response = await rawRequest(`/files/${chatId}/files/${fileId}`, {
+        method: 'GET'
+      });
+
+      const size = Number(response.headers.get('x-file-size') ?? '0');
+      const updatedAt = Number(response.headers.get('x-file-updated-at') ?? '0');
+      const createdAt = Number(response.headers.get('x-file-created-at') ?? '0');
+      const deletedAtHeader = response.headers.get('x-file-deleted-at');
+      const content = new Uint8Array(await response.arrayBuffer());
+
+      return {
+        content,
+        size,
+        updatedAt,
+        createdAt,
+        deletedAt: deletedAtHeader ? Number(deletedAtHeader) : null
+      };
+    }
   }
 };

@@ -3,6 +3,11 @@ const db = require('../db');
 const { authenticate } = require('../middleware/auth');
 const config = require('../config');
 const sse = require('../sse');
+const {
+  validateAttachableFileIds,
+  setMessageFileIds,
+  mapMessageRow
+} = require('../utils/message-files');
 
 const router = express.Router();
 
@@ -17,7 +22,7 @@ function broadcastToChatMembers(chatId, eventType, data, excludeUserId = null) {
 
 router.put('/:messageId', authenticate, (req, res) => {
   try {
-    const { content, fileIds } = req.body;
+    const { content } = req.body;
     
     const message = db.prepare('SELECT chat_id, sender_id FROM messages WHERE id = ?').get(req.params.messageId);
     if (!message) {
@@ -32,6 +37,15 @@ router.put('/:messageId', authenticate, (req, res) => {
     if (!isMember) {
       return res.status(403).json({ error: 'Access denied' });
     }
+
+    const fileValidation = validateAttachableFileIds(message.chat_id, req.body.fileIds);
+    if (!fileValidation.ok) {
+      return res.status(400).json({
+        error: fileValidation.error,
+        invalidFileIds: fileValidation.invalidFileIds
+      });
+    }
+    const fileIds = fileValidation.fileIds;
     
     if (!content && (!fileIds || fileIds.length === 0)) {
       return res.status(400).json({ error: 'Content or fileIds required' });
@@ -42,19 +56,16 @@ router.put('/:messageId', authenticate, (req, res) => {
     }
     
     const editedAt = Math.floor(Date.now() / 1000);
-    db.prepare('UPDATE messages SET content = ?, file_ids = ?, edited_at = ? WHERE id = ?').run(content || null, fileIds ? JSON.stringify(fileIds) : null, editedAt, req.params.messageId);
-    
-    const updated = db.prepare('SELECT id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE id = ?').get(req.params.messageId);
-    
-    const response = {
-      id: updated.id,
-      chatId: message.chat_id,
-      senderId: updated.sender_id,
-      content: updated.content,
-      fileIds: updated.file_ids ? JSON.parse(updated.file_ids) : [],
-      timestamp: updated.timestamp,
-      editedAt: updated.edited_at
-    };
+    db.prepare('UPDATE messages SET content = ?, edited_at = ? WHERE id = ?').run(
+      content || null,
+      editedAt,
+      req.params.messageId
+    );
+    setMessageFileIds(req.params.messageId, fileIds);
+
+    const updated = db.prepare('SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE id = ?').get(req.params.messageId);
+
+    const response = mapMessageRow(updated);
     
     broadcastToChatMembers(message.chat_id, 'message_edited', response, req.userId);
     

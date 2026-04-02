@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { Chat } from '../../lib/types';
+  import Avatar from '../common/Avatar.svelte';
 
   export let chats: Chat[] = [];
   export let loading = false;
@@ -31,7 +32,11 @@
     {:else}
       {#each chats as chat}
         <a href="#/chats/{chat.id}" class="chat-item" class:selected={selectedChatId === chat.id}>
-          <div class="chat-icon">{chat.type === 'gm' ? 'G' : 'P'}</div>
+          {#if chat.type === 'pm'}
+            <Avatar name={chat.otherUser?.username || 'Личный чат'} src={chat.otherUser?.avatarUrl} size={44} />
+          {:else}
+            <div class="chat-icon">{(chat.name || 'G').charAt(0).toUpperCase()}</div>
+          {/if}
           <div class="chat-info">
             <div class="chat-name">
               {chat.type === 'pm' ? (chat.otherUser?.username || 'Личный чат') : (chat.name || 'Групповой чат')}

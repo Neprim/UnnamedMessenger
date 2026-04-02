@@ -1,11 +1,26 @@
 const express = require('express');
+const fs = require('fs');
+const sharp = require('sharp');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { authenticate } = require('../middleware/auth');
 const config = require('../config');
 const sse = require('../sse');
+const {
+  ensureAvatarDir,
+  getAvatarFilePath,
+  getAvatarUrl,
+  removeAvatarFile
+} = require('../utils/avatar');
+const { mapMessageRow } = require('../utils/message-files');
 
 const router = express.Router();
+
+const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+const AVATAR_MIN_SIZE = 128;
+const AVATAR_MAX_SIZE = 2048;
+const AVATAR_MAX_RATIO = 4;
+const AVATAR_STORAGE_SIZE = 256;
 
 function createSystemMessage(chatId, eventType, data) {
   const messageId = uuidv4();
@@ -17,34 +32,71 @@ function createSystemMessage(chatId, eventType, data) {
   ).run(messageId, chatId, content, timestamp);
 
   const message = db.prepare(
-    'SELECT id, chat_id, sender_id, content, file_ids, timestamp, edited_at FROM messages WHERE id = ?'
+    'SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE id = ?'
   ).get(messageId);
 
+  return mapMessageRow(message);
+}
+
+function mapUser(user) {
   return {
-    id: message.id,
-    chatId: message.chat_id,
-    senderId: null,
-    content: message.content,
-    fileIds: message.file_ids ? JSON.parse(message.file_ids) : [],
-    timestamp: message.timestamp,
-    editedAt: message.edited_at
+    id: user.id,
+    username: user.username,
+    publicKey: user.public_key,
+    avatarUpdatedAt: user.avatar_updated_at,
+    avatarUrl: getAvatarUrl(user.id, user.avatar_updated_at),
+    createdAt: user.created_at
   };
+}
+
+async function normalizeAvatar(buffer) {
+  if (!buffer?.length) {
+    throw new Error('Avatar file is required');
+  }
+
+  if (buffer.length > AVATAR_MAX_BYTES) {
+    throw new Error('Avatar exceeds 5 MB');
+  }
+
+  const image = sharp(buffer, { animated: false, limitInputPixels: AVATAR_MAX_SIZE * AVATAR_MAX_SIZE });
+  const metadata = await image.metadata();
+
+  if (!metadata.format || !['jpeg', 'png', 'webp'].includes(metadata.format)) {
+    throw new Error('Only JPEG, PNG, and WebP avatars are supported');
+  }
+
+  if (!metadata.width || !metadata.height) {
+    throw new Error('Unable to determine image dimensions');
+  }
+
+  if (metadata.width < AVATAR_MIN_SIZE || metadata.height < AVATAR_MIN_SIZE) {
+    throw new Error(`Avatar must be at least ${AVATAR_MIN_SIZE}x${AVATAR_MIN_SIZE}`);
+  }
+
+  if (metadata.width > AVATAR_MAX_SIZE || metadata.height > AVATAR_MAX_SIZE) {
+    throw new Error(`Avatar must not exceed ${AVATAR_MAX_SIZE}x${AVATAR_MAX_SIZE}`);
+  }
+
+  const ratio = metadata.width / metadata.height;
+  if (ratio > AVATAR_MAX_RATIO || ratio < 1 / AVATAR_MAX_RATIO) {
+    throw new Error('Avatar aspect ratio is too extreme');
+  }
+
+  return sharp(buffer, { animated: false })
+    .resize(AVATAR_STORAGE_SIZE, AVATAR_STORAGE_SIZE, { fit: 'cover', position: 'centre' })
+    .webp({ quality: 90 })
+    .toBuffer();
 }
 
 router.get('/me', authenticate, (req, res) => {
   try {
-    const user = db.prepare('SELECT id, username, public_key, created_at FROM users WHERE id = ?').get(req.userId);
-    
+    const user = db.prepare('SELECT id, username, public_key, avatar_updated_at, created_at FROM users WHERE id = ?').get(req.userId);
+
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-    
-    res.json({
-      id: user.id,
-      username: user.username,
-      publicKey: user.public_key,
-      createdAt: user.created_at
-    });
+
+    res.json(mapUser(user));
   } catch (err) {
     console.error('Get user error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -54,31 +106,67 @@ router.get('/me', authenticate, (req, res) => {
 router.patch('/me', authenticate, (req, res) => {
   try {
     const { username } = req.body;
-    
+
     if (!username) {
       return res.status(400).json({ error: 'No fields to update' });
     }
-    
+
     if (username.length > config.limits.maxUsernameLength) {
       return res.status(400).json({ error: `Username exceeds ${config.limits.maxUsernameLength} characters` });
     }
-    
+
     const existing = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, req.userId);
     if (existing) {
       return res.status(409).json({ error: 'Username already taken' });
     }
-    
+
     db.prepare('UPDATE users SET username = ? WHERE id = ?').run(username, req.userId);
-    
-    const user = db.prepare('SELECT id, username, public_key FROM users WHERE id = ?').get(req.userId);
-    
-    res.json({
-      id: user.id,
-      username: user.username,
-      publicKey: user.public_key
-    });
+
+    const user = db.prepare('SELECT id, username, public_key, avatar_updated_at, created_at FROM users WHERE id = ?').get(req.userId);
+    res.json(mapUser(user));
   } catch (err) {
     console.error('Update user error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post(
+  '/me/avatar',
+  authenticate,
+  express.raw({
+    type: ['image/jpeg', 'image/png', 'image/webp'],
+    limit: `${AVATAR_MAX_BYTES}b`
+  }),
+  async (req, res) => {
+    try {
+      ensureAvatarDir();
+
+      const normalizedAvatar = await normalizeAvatar(req.body);
+      const avatarUpdatedAt = Math.floor(Date.now() / 1000);
+      const avatarPath = getAvatarFilePath(req.userId);
+
+      fs.writeFileSync(avatarPath, normalizedAvatar);
+      db.prepare('UPDATE users SET avatar_updated_at = ? WHERE id = ?').run(avatarUpdatedAt, req.userId);
+
+      res.json({
+        avatarUpdatedAt,
+        avatarUrl: getAvatarUrl(req.userId, avatarUpdatedAt)
+      });
+    } catch (err) {
+      console.error('Upload avatar error:', err);
+      const message = err instanceof Error ? err.message : 'Failed to upload avatar';
+      res.status(400).json({ error: message });
+    }
+  }
+);
+
+router.delete('/me/avatar', authenticate, (req, res) => {
+  try {
+    removeAvatarFile(req.userId);
+    db.prepare('UPDATE users SET avatar_updated_at = NULL WHERE id = ?').run(req.userId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete avatar error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -140,6 +228,7 @@ router.delete('/me', authenticate, (req, res) => {
       }
 
       db.prepare('DELETE FROM users WHERE id = ?').run(req.userId);
+      removeAvatarFile(req.userId);
 
       return { deletedChats, updatedChats };
     })();
@@ -181,20 +270,47 @@ router.delete('/me', authenticate, (req, res) => {
 router.get('/search', authenticate, (req, res) => {
   try {
     const { q } = req.query;
-    
+
     if (!q || q.length < 1) {
       return res.status(400).json({ error: 'Query parameter required' });
     }
-    
-    const users = db.prepare('SELECT id, username, public_key FROM users WHERE username LIKE ? LIMIT 20').all(`%${q}%`);
-    
-    res.json(users.map(u => ({
-      id: u.id,
-      username: u.username,
-      publicKey: u.public_key
-    })));
+
+    const users = db
+      .prepare('SELECT id, username, public_key, avatar_updated_at FROM users WHERE username LIKE ? LIMIT 20')
+      .all(`%${q}%`);
+
+    res.json(
+      users.map((user) => ({
+        id: user.id,
+        username: user.username,
+        publicKey: user.public_key,
+        avatarUpdatedAt: user.avatar_updated_at,
+        avatarUrl: getAvatarUrl(user.id, user.avatar_updated_at)
+      }))
+    );
   } catch (err) {
     console.error('Search users error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/:userId/avatar', authenticate, (req, res) => {
+  try {
+    const user = db.prepare('SELECT id, avatar_updated_at FROM users WHERE id = ?').get(req.params.userId);
+    if (!user || !user.avatar_updated_at) {
+      return res.status(404).json({ error: 'Avatar not found' });
+    }
+
+    const avatarPath = getAvatarFilePath(req.params.userId);
+    if (!fs.existsSync(avatarPath)) {
+      return res.status(404).json({ error: 'Avatar not found' });
+    }
+
+    res.setHeader('Content-Type', 'image/webp');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.sendFile(avatarPath);
+  } catch (err) {
+    console.error('Get avatar error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

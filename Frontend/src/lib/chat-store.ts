@@ -286,7 +286,7 @@ function createChatsStore() {
     finalizeClosedChat: (chatId: string) => {
       clearUnreadMarkerIfResolved(chatId);
     },
-    sendMessage: async (chatId: string, content: string) => {
+    sendMessage: async (chatId: string, content: string, fileIds: string[] = []) => {
       const authState = getRequiredAuth();
       const chat = await ensureChatLoaded(chatId);
 
@@ -294,11 +294,12 @@ function createChatsStore() {
         throw new Error('Chat key is not available');
       }
 
-      const encryptedContent = await crypto.encryptMessage(chat.chatKey, content);
-      const message = await api.chats.sendMessage(chatId, encryptedContent);
+      const encryptedContent = content ? await crypto.encryptMessage(chat.chatKey, content) : '';
+      const message = await api.chats.sendMessage(chatId, encryptedContent, fileIds);
       const nextMessage: Message = {
         ...message,
         content,
+        fileIds,
         senderUsername: authState.user?.username || 'Me'
       };
 
@@ -320,15 +321,18 @@ function createChatsStore() {
         throw new Error('Chat key is not available');
       }
 
+      const existingMessage = chat.messages?.find((message) => message.id === messageId);
       const encryptedContent = await crypto.encryptMessage(chat.chatKey, content);
-      const updatedMessage = await api.messages.edit(messageId, encryptedContent);
+      const updatedMessage = await api.messages.edit(messageId, encryptedContent, existingMessage?.fileIds ?? []);
 
       update((chatList) =>
         chatList.map((item) => {
           if (item.id !== chatId) return item;
 
           const messages = (item.messages ?? []).map((message) =>
-            message.id === updatedMessage.id ? { ...message, content, editedAt: updatedMessage.editedAt } : message
+            message.id === updatedMessage.id
+              ? { ...message, content, fileIds: updatedMessage.fileIds, editedAt: updatedMessage.editedAt }
+              : message
           );
 
           return {
@@ -496,7 +500,7 @@ function createChatsStore() {
 
       if (!chat) return;
 
-      if (!incomingMessage.content) {
+      if (!incomingMessage.content && (!incomingMessage.fileIds || incomingMessage.fileIds.length === 0)) {
         const messages = (chat.messages ?? []).filter((message) => message.id !== incomingMessage.id);
         replaceMessages(chatId, messages);
         return;
@@ -515,7 +519,12 @@ function createChatsStore() {
 
             const messages = (item.messages ?? []).map((message) =>
               message.id === incomingMessage.id
-                ? { ...message, content: decryptedMessage.content, editedAt: incomingMessage.editedAt }
+                ? {
+                    ...message,
+                    content: decryptedMessage.content,
+                    fileIds: incomingMessage.fileIds ?? message.fileIds,
+                    editedAt: incomingMessage.editedAt
+                  }
                 : message
             );
 

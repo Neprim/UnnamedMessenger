@@ -7,6 +7,21 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
+function concatIvAndCiphertext(iv: Uint8Array, encrypted: ArrayBuffer): Uint8Array {
+  const combined = new Uint8Array(iv.length + encrypted.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(encrypted), iv.length);
+  return combined;
+}
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+export function base64ToBytes(value: string): Uint8Array {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+}
+
 export async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const keyMaterial = await window.crypto.subtle.importKey(
@@ -43,16 +58,12 @@ export async function encryptPrivateKey(privateKey: CryptoKey, password: string,
     exported
   );
 
-  const combined = new Uint8Array(iv.length + encrypted.byteLength);
-  combined.set(iv);
-  combined.set(new Uint8Array(encrypted), iv.length);
-
-  return btoa(String.fromCharCode(...combined));
+  return bytesToBase64(concatIvAndCiphertext(iv, encrypted));
 }
 
 export async function decryptPrivateKey(encryptedData: string, password: string, salt: Uint8Array): Promise<CryptoKey> {
   const derivedKey = await deriveKey(password, salt);
-  const combined = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
+  const combined = base64ToBytes(encryptedData);
   
   const iv = combined.slice(0, 12);
   const encrypted = combined.slice(12);
@@ -182,15 +193,11 @@ export async function encryptMessage(chatKey: CryptoKey, message: string): Promi
     encoder.encode(paddedMessage)
   );
 
-  const combined = new Uint8Array(iv.length + encrypted.byteLength);
-  combined.set(iv);
-  combined.set(new Uint8Array(encrypted), iv.length);
-
-  return btoa(String.fromCharCode(...combined));
+  return bytesToBase64(concatIvAndCiphertext(iv, encrypted));
 }
 
 export async function decryptMessage(chatKey: CryptoKey, encryptedData: string): Promise<string> {
-  const combined = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
+  const combined = base64ToBytes(encryptedData);
   const iv = combined.slice(0, 12);
   const encrypted = combined.slice(12);
 
@@ -201,6 +208,30 @@ export async function decryptMessage(chatKey: CryptoKey, encryptedData: string):
   );
 
   return extractMessage(new Uint8Array(decrypted));
+}
+
+export async function encryptBinary(chatKey: CryptoKey, data: Uint8Array): Promise<Uint8Array> {
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await window.crypto.subtle.encrypt(
+    { name: ALGORITHM_AES, iv },
+    chatKey,
+    toArrayBuffer(data)
+  );
+
+  return concatIvAndCiphertext(iv, encrypted);
+}
+
+export async function decryptBinary(chatKey: CryptoKey, encryptedData: Uint8Array): Promise<Uint8Array> {
+  const iv = encryptedData.slice(0, 12);
+  const encrypted = encryptedData.slice(12);
+
+  const decrypted = await window.crypto.subtle.decrypt(
+    { name: ALGORITHM_AES, iv },
+    chatKey,
+    encrypted
+  );
+
+  return new Uint8Array(decrypted);
 }
 
 export async function encryptChatKeyWithPublicKey(chatKey: CryptoKey, publicKey: CryptoKey): Promise<string> {

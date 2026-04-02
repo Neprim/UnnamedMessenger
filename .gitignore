@@ -1,6 +1,8 @@
 Backend/messenger.db
 Backend/messenger.db-*
 Backend/ssl/
+prometheus*
+grafana*
 
 # Logs
 logs

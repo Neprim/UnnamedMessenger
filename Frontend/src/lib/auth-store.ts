@@ -85,7 +85,13 @@ function createAuthStore() {
               ...state,
               isLoading: false,
               isAuthenticated: true,
-              user: { id: userData.id, username: userData.username, publicKey: userData.publicKey },
+              user: {
+                id: userData.id,
+                username: userData.username,
+                publicKey: userData.publicKey,
+                avatarUrl: userData.avatarUrl,
+                avatarUpdatedAt: userData.avatarUpdatedAt
+              },
               privateKey
             }));
           } else {

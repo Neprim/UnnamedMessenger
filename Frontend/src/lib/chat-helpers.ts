@@ -1,5 +1,5 @@
 import * as crypto from './crypto';
-import type { Chat, ChatMember, LastMessage, Message } from './types';
+import type { Chat, ChatFileMetadata, ChatMember, LastMessage, Message } from './types';
 
 type SystemMessagePayload = {
   event?: string;
@@ -31,13 +31,16 @@ export function getMemberMap(members: ChatMember[] = []): Map<string, string> {
   return new Map(members.map((member) => [member.id, member.username]));
 }
 
-export function getOtherUser(chat: Pick<Chat, 'type' | 'members'>, currentUserId?: string): { id: string; username: string } | null {
+export function getOtherUser(
+  chat: Pick<Chat, 'type' | 'members'>,
+  currentUserId?: string
+): { id: string; username: string; avatarUrl?: string | null } | null {
   if (chat.type !== 'pm' || !chat.members) {
     return null;
   }
 
   const otherMember = chat.members.find((member) => member.id !== currentUserId);
-  return otherMember ? { id: otherMember.id, username: otherMember.username } : null;
+  return otherMember ? { id: otherMember.id, username: otherMember.username, avatarUrl: otherMember.avatarUrl } : null;
 }
 
 export function isPersonalChatWithUser(chat: Chat, userId: string): boolean {
@@ -52,6 +55,17 @@ export async function decryptMessageForDisplay(
   if (isSystemMessage(message) || !chatKey) {
     return {
       ...message,
+      content: message.content ?? '',
+      fileIds: message.fileIds ?? [],
+      senderUsername: message.senderId ? memberMap.get(message.senderId) ?? 'Unknown' : message.senderUsername
+    };
+  }
+
+  if (!message.content) {
+    return {
+      ...message,
+      content: '',
+      fileIds: message.fileIds ?? [],
       senderUsername: message.senderId ? memberMap.get(message.senderId) ?? 'Unknown' : message.senderUsername
     };
   }
@@ -98,4 +112,44 @@ export function buildLastMessage(messages: Message[], members: ChatMember[] = []
     senderUsername: lastMessage.senderUsername ?? sender?.username ?? 'Unknown',
     isSystem: false
   };
+}
+
+export function formatFileSize(size: number): string {
+  if (!Number.isFinite(size) || size < 0) {
+    return 'Unknown size';
+  }
+
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  }
+
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function parseFileMetadataJson(content: string): ChatFileMetadata | null {
+  try {
+    const parsed = JSON.parse(content) as Partial<ChatFileMetadata>;
+    if (
+      typeof parsed.name !== 'string' ||
+      typeof parsed.type !== 'string' ||
+      typeof parsed.size !== 'number'
+    ) {
+      return null;
+    }
+
+    return {
+      name: parsed.name,
+      type: parsed.type,
+      size: parsed.size,
+      width: typeof parsed.width === 'number' ? parsed.width : undefined,
+      height: typeof parsed.height === 'number' ? parsed.height : undefined,
+      duration: typeof parsed.duration === 'number' ? parsed.duration : undefined
+    };
+  } catch {
+    return null;
+  }
 }

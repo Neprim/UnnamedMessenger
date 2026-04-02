@@ -2,6 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import { getSystemMessageContent, parseSystemMessage } from '../../lib/chat-helpers';
   import type { Message } from '../../lib/types';
+  import Avatar from '../common/Avatar.svelte';
 
   interface MessageGroup {
     senderId: string;
@@ -15,10 +16,23 @@
   export let showPlaceholder = false;
   export let unreadMarkerId: string | null | undefined = null;
   export let container: HTMLDivElement | undefined;
+  export let memberAvatarUrls: Record<string, string | null | undefined> = {};
+  export let fileDisplayById: Record<
+    string,
+    {
+      status: 'loading' | 'ready' | 'missing' | 'error';
+      name?: string;
+      type?: string;
+      size?: number;
+      sizeLabel?: string;
+      deletedAt?: number | null;
+    }
+  > = {};
 
   const dispatch = createEventDispatcher<{
     scroll: Event;
     messagecontextmenu: { event: MouseEvent; messageId: string; senderId: string | null };
+    fileclick: { fileId: string };
   }>();
 </script>
 
@@ -36,10 +50,14 @@
           {new Date(group.messages[0].timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </span>
       </div>
-    {:else}
+      {:else}
       <div class="message-group">
         <div class="message-header">
-          <div class="avatar">{(group.senderUsername || '?').charAt(0).toUpperCase()}</div>
+          <Avatar
+            name={group.senderUsername || 'Unknown'}
+            src={group.senderId ? memberAvatarUrls[group.senderId] : null}
+            size={28}
+          />
           <span class="sender-name">{group.senderUsername || 'Unknown'}</span>
         </div>
         {#each group.messages as msg}
@@ -59,6 +77,36 @@
             on:contextmenu={(event) => dispatch('messagecontextmenu', { event, messageId: msg.id, senderId: msg.senderId })}
           >
             <div class="message-content">{msg.content}</div>
+            {#if msg.fileIds.length > 0}
+              <div class="message-files">
+                {#each msg.fileIds as fileId}
+                  {@const fileDisplay = fileDisplayById[fileId]}
+                  <button
+                    type="button"
+                    class="file-chip"
+                    class:file-chip-missing={fileDisplay?.status === 'missing'}
+                    title={fileDisplay?.type || fileId}
+                    disabled={fileDisplay?.status !== 'ready'}
+                    on:click={() => dispatch('fileclick', { fileId })}
+                  >
+                    {#if fileDisplay?.status === 'ready'}
+                      {fileDisplay.name}
+                      {#if fileDisplay.sizeLabel}
+                        ({fileDisplay.sizeLabel})
+                      {/if}
+                    {:else if fileDisplay?.status === 'loading'}
+                      Загрузка файла...
+                    {:else if fileDisplay?.status === 'missing'}
+                      Файл удалён
+                    {:else if fileDisplay?.status === 'error'}
+                      Ошибка загрузки файла
+                    {:else}
+                      Файл {fileId.slice(0, 8)}
+                    {/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
             <span class="msg-time" title={new Date(msg.timestamp * 1000).toLocaleString()}>
               {new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               {#if msg.editedAt}
@@ -149,20 +197,6 @@
     padding: 0 4px;
   }
 
-  .avatar {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: #4caf50;
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    font-weight: 600;
-    flex-shrink: 0;
-  }
-
   .sender-name {
     font-weight: 600;
     font-size: 14px;
@@ -190,6 +224,35 @@
     font-size: 15px;
     line-height: 1.4;
     flex: 1;
+  }
+
+  .message-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .file-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: none;
+    background: rgba(15, 23, 42, 0.08);
+    color: #334155;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .file-chip-missing {
+    background: rgba(220, 38, 38, 0.08);
+    color: #b91c1c;
+  }
+
+  .file-chip:disabled {
+    cursor: default;
+    opacity: 0.85;
   }
 
   .msg-time {
