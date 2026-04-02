@@ -9,8 +9,11 @@
   import CreateChatModal from '../components/chat/CreateChatModal.svelte';
   import Avatar from '../components/common/Avatar.svelte';
   import AvatarCropModal from '../components/settings/AvatarCropModal.svelte';
+  import UserFilesModal from '../components/settings/UserFilesModal.svelte';
   import ChatView from './ChatView.svelte';
-  import type { SearchUserResult } from '../lib/types';
+  import { cacheFile, getCachedFile } from '../lib/file-cache';
+  import { formatFileSize, parseFileMetadataJson } from '../lib/chat-helpers';
+  import type { ChatFileMetadata, SearchUserResult } from '../lib/types';
 
   export let params: { id?: string } = {};
 
@@ -22,6 +25,7 @@
   let showPasswordModal = false;
   let showDeleteAccountModal = false;
   let showAvatarModal = false;
+  let showUserFilesModal = false;
   let exportConfirmChecked = false;
   let exportingKey = false;
   let uploadingAvatar = false;
@@ -43,6 +47,42 @@
   let searching = false;
   let selectedUserId: string | null = null;
   let pendingAvatarFile: File | null = null;
+  let loadingUserFiles = false;
+  let userFilesQuotaBytes = 0;
+  let userFilesUsedBytes = 0;
+  let inaccessibleUserFilesBytes = 0;
+  let inaccessibleUserFiles: Array<{ fileId: string; chatId: string }> = [];
+  let deletingInaccessibleUserFiles = false;
+  let deletingOwnedFile = false;
+  let filePendingDeletion: (typeof userFileGroups)[number]['files'][number] & { chatId: string } | null = null;
+  let showDeleteOwnedFileModal = false;
+  let imageDeletePreviewLoading = false;
+  let selectedDeleteMode: 'smooth' | 'nearest' | 'none' = 'smooth';
+  let imageDeletePreviews: {
+    smooth: { objectUrl: string; width: number; height: number } | null;
+    nearest: { objectUrl: string; width: number; height: number } | null;
+  } = {
+    smooth: null,
+    nearest: null
+  };
+  let userFileGroups: Array<{
+    chatId: string;
+    chatName: string;
+    totalSizeLabel: string;
+    totalSizeBytes: number;
+    fileCount: number;
+    files: Array<{
+      id: string;
+      name: string;
+      type: string;
+      size: number;
+      sizeLabel: string;
+      updatedAt: number;
+      deletedAt: number | null;
+      isAvatar?: boolean;
+      previewDataUrl?: string;
+    }>;
+  }> = [];
 
   let unsubscribeMemberEvent: (() => void) | undefined;
   let unsubscribeChatDeleted: (() => void) | undefined;
@@ -253,6 +293,345 @@
     }
   }
 
+  function getChatDisplayName(chat: Chat) {
+    return chat.type === 'pm' ? chat.otherUser?.username || 'Личный чат' : chat.name || 'Групповой чат';
+  }
+
+  async function openUserFilesModal() {
+    showSettingsModal = false;
+    showUserFilesModal = true;
+    loadingUserFiles = true;
+    inaccessibleUserFilesBytes = 0;
+    inaccessibleUserFiles = [];
+    userFileGroups = [];
+
+    try {
+      const result = await api.files.listMine();
+      userFilesQuotaBytes = result.quotaBytes;
+      userFilesUsedBytes = result.usedBytes;
+
+      const availableChats = new Map($chats.map((chat) => [chat.id, chat]));
+      const filesByChat = new Map<string, typeof result.files>();
+
+      for (const file of result.files) {
+        if (!availableChats.has(file.chatId)) {
+          inaccessibleUserFilesBytes += file.size;
+          inaccessibleUserFiles.push({ fileId: file.id, chatId: file.chatId });
+          continue;
+        }
+
+        const bucket = filesByChat.get(file.chatId) ?? [];
+        bucket.push(file);
+        filesByChat.set(file.chatId, bucket);
+      }
+
+      const nextGroups = await Promise.all(
+        Array.from(filesByChat.entries()).map(async ([chatId, files]) => {
+          const knownChat = availableChats.get(chatId);
+          const hydratedChat = knownChat?.chatKey ? knownChat : await chats.ensureChatLoaded(chatId, { limit: 1 });
+          const chatKey = hydratedChat?.chatKey ?? null;
+          const metadataEntries = await api.files.downloadChatFilesMetadata(chatId);
+          const metadataById = new Map(metadataEntries.filter((item) => item.fileId).map((item) => [item.fileId as string, item]));
+
+          const decoratedFiles = await Promise.all(
+            files.map(async (file) => {
+              const metadataEntry = metadataById.get(file.id);
+              let metadata: ChatFileMetadata | null = null;
+
+              if (metadataEntry && chatKey) {
+                try {
+                  const decryptedMetadataBytes = await crypto.decryptBinary(
+                    chatKey,
+                    crypto.base64ToBytes(metadataEntry.metadataBase64)
+                  );
+                  metadata = parseFileMetadataJson(new TextDecoder().decode(decryptedMetadataBytes));
+                } catch {
+                  metadata = null;
+                }
+              }
+
+              return {
+                id: file.id,
+                name: metadata?.name || `Файл ${file.id.slice(0, 8)}`,
+                type: metadata?.type || 'application/octet-stream',
+                size: file.size,
+                sizeLabel: formatFileSize(file.size),
+                updatedAt: file.updatedAt,
+                deletedAt: file.deletedAt,
+                isAvatar: file.isAvatar,
+                previewDataUrl: metadata?.previewDataUrl
+              };
+            })
+          );
+
+          decoratedFiles.sort((left, right) => right.updatedAt - left.updatedAt);
+
+          return {
+            chatId,
+            chatName: getChatDisplayName(hydratedChat ?? knownChat!),
+            totalSizeLabel: formatFileSize(files.reduce((sum, file) => sum + file.size, 0)),
+            totalSizeBytes: files.reduce((sum, file) => sum + file.size, 0),
+            fileCount: files.length,
+            files: decoratedFiles
+          };
+        })
+      );
+
+      userFileGroups = nextGroups.sort((left, right) => left.chatName.localeCompare(right.chatName, 'ru'));
+    } catch (exception) {
+      alert(exception instanceof Error ? exception.message : 'Не удалось загрузить список файлов');
+      showUserFilesModal = false;
+    } finally {
+      loadingUserFiles = false;
+    }
+  }
+
+  async function handleOpenOwnedFile(event: CustomEvent<{ fileId: string }>) {
+    const file = userFileGroups.flatMap((group) => group.files.map((item) => ({ ...item, chatId: group.chatId }))).find((item) => item.id === event.detail.fileId);
+    if (!file) {
+      return;
+    }
+
+    const chat = $chats.find((item) => item.id === file.chatId) ?? (await chats.ensureChatLoaded(file.chatId, { limit: 1 }));
+    if (!chat?.chatKey) {
+      alert('Ключ чата недоступен');
+      return;
+    }
+
+    let asset = await getCachedFile(file.id, file.updatedAt);
+    if (!asset) {
+      const contentResponse = await api.files.downloadChatFileContent(file.chatId, file.id);
+      const decryptedContent = await crypto.decryptBinary(chat.chatKey, contentResponse.content);
+      const blob = new Blob([Uint8Array.from(decryptedContent).buffer], {
+        type: file.type || 'application/octet-stream'
+      });
+      asset = await cacheFile(file.id, blob, {
+        type: file.type || 'application/octet-stream',
+        name: file.name,
+        updatedAt: contentResponse.updatedAt
+      });
+    }
+
+    const isPreviewable =
+      asset.type.startsWith('image/') ||
+      asset.type === 'application/pdf' ||
+      asset.type.startsWith('text/');
+
+    if (isPreviewable) {
+      window.open(asset.objectUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    const link = document.createElement('a');
+    link.href = asset.objectUrl;
+    link.download = asset.name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  function findOwnedFile(fileId: string) {
+    return userFileGroups
+      .flatMap((group) => group.files.map((file) => ({ ...file, chatId: group.chatId })))
+      .find((file) => file.id === fileId) ?? null;
+  }
+
+  function revokeImageDeletePreviews() {
+    imageDeletePreviews.smooth?.objectUrl && URL.revokeObjectURL(imageDeletePreviews.smooth.objectUrl);
+    imageDeletePreviews.nearest?.objectUrl && URL.revokeObjectURL(imageDeletePreviews.nearest.objectUrl);
+    imageDeletePreviews = { smooth: null, nearest: null };
+  }
+
+  async function openOwnedFileDeleteModal(event: CustomEvent<{ fileId: string }>) {
+    const file = findOwnedFile(event.detail.fileId);
+    if (!file) {
+      return;
+    }
+
+    revokeImageDeletePreviews();
+    filePendingDeletion = file;
+    showDeleteOwnedFileModal = true;
+    selectedDeleteMode = 'smooth';
+
+    if (!file.type.startsWith('image/')) {
+      return;
+    }
+
+    imageDeletePreviewLoading = true;
+    try {
+      const { asset } = await loadOwnedFileAsset(file);
+      const smoothBlob = await createImagePlaceholder(asset.objectUrl, file.type, 'smooth');
+      const nearestBlob = await createImagePlaceholder(asset.objectUrl, file.type, 'nearest');
+      imageDeletePreviews = {
+        smooth: {
+          objectUrl: URL.createObjectURL(smoothBlob),
+          width: 48,
+          height: 48
+        },
+        nearest: {
+          objectUrl: URL.createObjectURL(nearestBlob),
+          width: 48,
+          height: 48
+        }
+      };
+    } catch {
+      imageDeletePreviews = { smooth: null, nearest: null };
+    } finally {
+      imageDeletePreviewLoading = false;
+    }
+  }
+
+  async function loadOwnedFileAsset(file: NonNullable<typeof filePendingDeletion>) {
+    const chat = $chats.find((item) => item.id === file.chatId) ?? (await chats.ensureChatLoaded(file.chatId, { limit: 1 }));
+    if (!chat?.chatKey) {
+      throw new Error('Ключ чата недоступен');
+    }
+
+    let asset = await getCachedFile(file.id, file.updatedAt);
+    if (!asset) {
+      const contentResponse = await api.files.downloadChatFileContent(file.chatId, file.id);
+      const decryptedContent = await crypto.decryptBinary(chat.chatKey, contentResponse.content);
+      const blob = new Blob([Uint8Array.from(decryptedContent).buffer], {
+        type: file.type || 'application/octet-stream'
+      });
+      asset = await cacheFile(file.id, blob, {
+        type: file.type || 'application/octet-stream',
+        name: file.name,
+        updatedAt: contentResponse.updatedAt
+      });
+    }
+
+    return { asset, chatKey: chat.chatKey };
+  }
+
+  function canvasBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob> {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error('Не удалось создать заглушку'));
+        }
+      }, type, quality);
+    });
+  }
+
+  async function createImagePlaceholder(
+    sourceUrl: string,
+    outputType: string,
+    mode: 'smooth' | 'nearest'
+  ): Promise<Blob> {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Не удалось обработать изображение'));
+      img.src = sourceUrl;
+    });
+
+    const maxSide = 48;
+    const scale = Math.min(maxSide / image.naturalWidth, maxSide / image.naturalHeight, 1);
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Не удалось создать заглушку');
+    }
+
+    context.imageSmoothingEnabled = mode === 'smooth';
+    context.imageSmoothingQuality = mode === 'smooth' ? 'medium' : 'low';
+    context.drawImage(image, 0, 0, width, height);
+
+    const safeType = ['image/png', 'image/jpeg', 'image/webp'].includes(outputType) ? outputType : 'image/webp';
+    return canvasBlob(canvas, safeType, safeType === 'image/png' ? undefined : 0.72);
+  }
+
+  async function deleteOwnedFileCompletely() {
+    if (!filePendingDeletion || deletingOwnedFile) return;
+
+    deletingOwnedFile = true;
+    try {
+      await api.files.deleteChatFile(filePendingDeletion.chatId, filePendingDeletion.id);
+      showDeleteOwnedFileModal = false;
+      filePendingDeletion = null;
+      revokeImageDeletePreviews();
+      await openUserFilesModal();
+    } catch (exception) {
+      alert(exception instanceof Error ? exception.message : 'Не удалось удалить файл');
+    } finally {
+      deletingOwnedFile = false;
+    }
+  }
+
+  async function replaceOwnedImageWithPlaceholder(mode: 'smooth' | 'nearest') {
+    if (!filePendingDeletion || deletingOwnedFile) return;
+
+    deletingOwnedFile = true;
+    try {
+      const { asset, chatKey } = await loadOwnedFileAsset(filePendingDeletion);
+      const placeholderBlob = await createImagePlaceholder(asset.objectUrl, filePendingDeletion.type, mode);
+      const metadata: ChatFileMetadata = {
+        name: filePendingDeletion.name,
+        type: placeholderBlob.type || filePendingDeletion.type,
+        size: placeholderBlob.size,
+        previewDataUrl: asset.type.startsWith('image/') ? filePendingDeletion.previewDataUrl : undefined
+      };
+
+      const encryptedContent = await crypto.encryptBinary(chatKey, new Uint8Array(await placeholderBlob.arrayBuffer()));
+      const encryptedMetadata = await crypto.encryptBinary(chatKey, new TextEncoder().encode(JSON.stringify(metadata)));
+      await api.files.replaceMineWithPlaceholder(filePendingDeletion.id, encryptedContent, crypto.bytesToBase64(encryptedMetadata));
+
+      showDeleteOwnedFileModal = false;
+      filePendingDeletion = null;
+      revokeImageDeletePreviews();
+      await openUserFilesModal();
+    } catch (exception) {
+      alert(exception instanceof Error ? exception.message : 'Не удалось заменить файл заглушкой');
+    } finally {
+      deletingOwnedFile = false;
+    }
+  }
+
+  async function handleDeleteOwnedFile() {
+    if (!filePendingDeletion || deletingOwnedFile) return;
+
+    if (filePendingDeletion.type.startsWith('image/')) {
+      if (selectedDeleteMode === 'none') {
+        await deleteOwnedFileCompletely();
+        return;
+      }
+
+      await replaceOwnedImageWithPlaceholder(selectedDeleteMode);
+      return;
+    }
+
+    await deleteOwnedFileCompletely();
+  }
+
+  async function handleDeleteInaccessibleUserFiles() {
+    if (deletingInaccessibleUserFiles || inaccessibleUserFiles.length === 0) {
+      return;
+    }
+
+    if (!confirm('Удалить все ваши файлы из чатов, где вы больше не состоите?')) {
+      return;
+    }
+
+    deletingInaccessibleUserFiles = true;
+    try {
+      await Promise.all(
+        inaccessibleUserFiles.map((file) => api.files.deleteChatFile(file.chatId, file.fileId))
+      );
+      await openUserFilesModal();
+    } catch (exception) {
+      alert(exception instanceof Error ? exception.message : 'Не удалось удалить недоступные файлы');
+    } finally {
+      deletingInaccessibleUserFiles = false;
+    }
+  }
+
   onMount(() => {
     loadChats();
 
@@ -314,6 +693,7 @@
   });
 
   onDestroy(() => {
+    revokeImageDeletePreviews();
     unsubscribeMemberEvent?.();
     unsubscribeChatDeleted?.();
     unsubscribeSSE?.();
@@ -387,6 +767,7 @@
         </div>
       </div>
       <div class="settings-list">
+        <button class="settings-btn" on:click={openUserFilesModal}>Мои файлы</button>
         <button class="settings-btn" on:click={() => { showUsernameModal = true; showSettingsModal = false; }}>Изменить имя пользователя</button>
         <button class="settings-btn" on:click={() => { showPasswordModal = true; showSettingsModal = false; }}>Изменить пароль</button>
         <button class="settings-btn" on:click={() => { showExportKeyModal = true; showSettingsModal = false; }}>Экспорт приватного ключа</button>
@@ -396,6 +777,116 @@
       <div class="modal-actions">
         <button on:click={() => (showSettingsModal = false)}>Закрыть</button>
       </div>
+    </div>
+  </div>
+{/if}
+
+{#if showUserFilesModal}
+  <UserFilesModal
+    loading={loadingUserFiles}
+    quotaBytes={userFilesQuotaBytes}
+    usedBytes={userFilesUsedBytes}
+    inaccessibleBytes={inaccessibleUserFilesBytes}
+    deletingInaccessible={deletingInaccessibleUserFiles}
+    groups={userFileGroups}
+    on:close={() => (showUserFilesModal = false)}
+    on:openfile={handleOpenOwnedFile}
+    on:deletefile={openOwnedFileDeleteModal}
+    on:deleteinaccessible={handleDeleteInaccessibleUserFiles}
+    on:openchat={(event) => {
+      showUserFilesModal = false;
+      push(`/chats/${event.detail.chatId}`);
+    }}
+  />
+{/if}
+
+{#if showDeleteOwnedFileModal && filePendingDeletion}
+  <div class="modal-shell delete-file-shell">
+    <button
+      class="modal-overlay"
+      type="button"
+      aria-label="Закрыть окно удаления файла"
+      on:click={() => {
+        if (!deletingOwnedFile) {
+          showDeleteOwnedFileModal = false;
+          filePendingDeletion = null;
+          revokeImageDeletePreviews();
+        }
+      }}
+    ></button>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-file-title">
+      <h3 id="delete-file-title">Удалить файл</h3>
+      {#if filePendingDeletion.type.startsWith('image/')}
+        <p class="modal-copy">
+          Выберите заглушку для удаляемого файла <strong>{filePendingDeletion.name}</strong>.
+        </p>
+        <div class="delete-options-row">
+          <label class="delete-option" class:selected={selectedDeleteMode === 'smooth'}>
+            <input type="radio" name="deleteMode" value="smooth" bind:group={selectedDeleteMode} disabled={deletingOwnedFile || imageDeletePreviewLoading} />
+            <span class="preview-thumb large">
+              {#if imageDeletePreviews.smooth}
+                <img src={imageDeletePreviews.smooth.objectUrl} alt="Превью сглаженной заглушки" width="144" height="144" />
+              {:else if imageDeletePreviewLoading}
+                <span class="preview-loading">...</span>
+              {:else}
+                <span class="preview-loading">Нет</span>
+              {/if}
+            </span>
+          </label>
+          <label class="delete-option" class:selected={selectedDeleteMode === 'nearest'}>
+            <input type="radio" name="deleteMode" value="nearest" bind:group={selectedDeleteMode} disabled={deletingOwnedFile || imageDeletePreviewLoading} />
+            <span class="preview-thumb large">
+              {#if imageDeletePreviews.nearest}
+                <img src={imageDeletePreviews.nearest.objectUrl} alt="Превью пиксельной заглушки" width="144" height="144" />
+              {:else if imageDeletePreviewLoading}
+                <span class="preview-loading">...</span>
+              {:else}
+                <span class="preview-loading">Нет</span>
+              {/if}
+            </span>
+          </label>
+          <label class="delete-option text-option" class:selected={selectedDeleteMode === 'none'}>
+            <input type="radio" name="deleteMode" value="none" bind:group={selectedDeleteMode} disabled={deletingOwnedFile} />
+            <span class="text-option-label">Удалить без заглушки</span>
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button
+            type="button"
+            on:click={() => {
+              showDeleteOwnedFileModal = false;
+              filePendingDeletion = null;
+              revokeImageDeletePreviews();
+            }}
+            disabled={deletingOwnedFile}
+          >
+            Отмена
+          </button>
+          <button type="button" class="danger-action" disabled={deletingOwnedFile || imageDeletePreviewLoading} on:click={handleDeleteOwnedFile}>
+            {deletingOwnedFile ? 'Удаление...' : 'Удалить'}
+          </button>
+        </div>
+      {:else}
+        <p class="modal-copy">
+          Файл <strong>{filePendingDeletion.name}</strong> будет удалён полностью без заглушки.
+        </p>
+        <div class="modal-actions">
+          <button
+            type="button"
+            on:click={() => {
+              showDeleteOwnedFileModal = false;
+              filePendingDeletion = null;
+              revokeImageDeletePreviews();
+            }}
+            disabled={deletingOwnedFile}
+          >
+            Отмена
+          </button>
+          <button type="button" class="danger-action" disabled={deletingOwnedFile} on:click={deleteOwnedFileCompletely}>
+            {deletingOwnedFile ? 'Удаление...' : 'Удалить файл'}
+          </button>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}
@@ -524,6 +1015,10 @@
     align-items: center;
     justify-content: center;
     z-index: 100;
+  }
+
+  .delete-file-shell {
+    z-index: 120;
   }
 
   .modal-overlay {
@@ -666,6 +1161,94 @@
     color: #666;
     margin-bottom: 16px;
     line-height: 1.4;
+  }
+
+  .modal-copy {
+    font-size: 14px;
+    color: #475569;
+    margin: 0 0 16px;
+    line-height: 1.45;
+  }
+
+  .delete-options-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: stretch;
+    margin-bottom: 18px;
+  }
+
+  .delete-option {
+    flex: 1 1 180px;
+    min-width: 0;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid #dbe4ee;
+    border-radius: 14px;
+    background: #f8fafc;
+    cursor: pointer;
+  }
+
+  .delete-option.selected {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+    background: #eff6ff;
+  }
+
+  .delete-option input {
+    margin: 0;
+  }
+
+  .preview-thumb {
+    width: 96px;
+    height: 96px;
+    flex: none;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .preview-thumb.large {
+    width: min(144px, 100%);
+    aspect-ratio: 1;
+    height: auto;
+  }
+
+  .preview-thumb img {
+    width: 96px;
+    height: 96px;
+    object-fit: cover;
+    display: block;
+  }
+
+  .preview-thumb.large img {
+    width: 100%;
+    height: 100%;
+  }
+
+  .preview-loading {
+    font-size: 12px;
+    color: #64748b;
+  }
+
+  .text-option {
+    justify-content: center;
+  }
+
+  .text-option-label {
+    text-align: center;
+    font-size: 14px;
+    font-weight: 600;
+    color: #0f172a;
+    line-height: 1.35;
   }
 
   .checkbox-label {

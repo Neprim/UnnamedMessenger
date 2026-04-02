@@ -514,12 +514,12 @@ function createChatsStore() {
       await api.chats.addMember(chatId, userId, encryptedKey);
       return ensureChatLoaded(chatId, { force: true, limit: Math.max(chat.messages?.length ?? 0, INITIAL_CHAT_MESSAGES_LIMIT) });
     },
-    removeMember: async (chatId: string, userId: string) => {
-      await api.chats.removeMember(chatId, userId);
+    removeMember: async (chatId: string, userId: string, options?: { deleteMessages?: boolean; deleteFiles?: boolean }) => {
+      await api.chats.removeMember(chatId, userId, options);
       return ensureChatLoaded(chatId, { force: true });
     },
-    leaveChat: async (chatId: string) => {
-      await api.chats.leave(chatId);
+    leaveChat: async (chatId: string, options?: { deleteMessages?: boolean; deleteFiles?: boolean }) => {
+      await api.chats.leave(chatId, options);
       removeChat(chatId);
     },
     deleteChat: async (chatId: string) => {

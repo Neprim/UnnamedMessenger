@@ -26,6 +26,9 @@
       size?: number;
       sizeLabel?: string;
       deletedAt?: number | null;
+      previewDataUrl?: string;
+      previewWidth?: number;
+      previewHeight?: number;
     }
   > = {};
   export let imagePreviewById: Record<
@@ -112,6 +115,20 @@
                           height={imagePreview.height}
                         />
                       </button>
+                    {:else if fileDisplay?.type?.startsWith('image/') && fileDisplay.previewDataUrl}
+                      <div
+                        class="image-preview-fallback-wrap"
+                        style={`width:${fileDisplay.previewWidth || 48}px;height:${fileDisplay.previewHeight || 48}px;`}
+                      >
+                        <img
+                          class="image-preview image-preview-fallback"
+                          src={fileDisplay.previewDataUrl}
+                          alt={fileDisplay.name || 'Мини-превью вложения'}
+                          width={fileDisplay.previewWidth || 48}
+                          height={fileDisplay.previewHeight || 48}
+                          style={`width:${fileDisplay.previewWidth || 48}px;height:${fileDisplay.previewHeight || 48}px;`}
+                        />
+                      </div>
                     {:else}
                       <button
                         type="button"
@@ -343,6 +360,21 @@
     object-fit: cover;
     box-shadow: 0 6px 16px rgba(15, 23, 42, 0.14);
     background: rgba(15, 23, 42, 0.04);
+  }
+
+  .image-preview-fallback-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 14px;
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.06);
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+  }
+
+  .image-preview-fallback {
+    box-shadow: none;
+    image-rendering: auto;
   }
 
   .msg-time {

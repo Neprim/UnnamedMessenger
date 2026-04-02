@@ -181,8 +181,8 @@ export const api = {
     delete: (chatId: string) => 
       request<{ message: string }>(`/chats/${chatId}`, { method: 'DELETE' }),
     
-    leave: (chatId: string) => 
-      request<{ message: string }>(`/chats/${chatId}/leave`, { method: 'POST' }),
+    leave: (chatId: string, options?: { deleteMessages?: boolean; deleteFiles?: boolean }) => 
+      request<{ message: string }>(`/chats/${chatId}/leave`, { method: 'POST', body: JSON.stringify(options ?? {}) }),
     
     addMember: (chatId: string, userId: string, encryptedKey: string) => 
       request<{ message: string }>(`/chats/${chatId}/members/add`, { 
@@ -190,10 +190,10 @@ export const api = {
         body: JSON.stringify({ userId, encryptedKey }) 
       }),
     
-    removeMember: (chatId: string, userId: string) => 
+    removeMember: (chatId: string, userId: string, options?: { deleteMessages?: boolean; deleteFiles?: boolean }) => 
       request<{ message: string }>(`/chats/${chatId}/members/remove`, { 
         method: 'POST', 
-        body: JSON.stringify({ userId }) 
+        body: JSON.stringify({ userId, ...(options ?? {}) }) 
       }),
     
     getMessages: (chatId: string, options: { limit?: number; cursor?: string; beforeCnt?: number; afterCnt?: number } = {}) => {
@@ -256,6 +256,23 @@ export const api = {
         `/files/${chatId}/files/${fileId}`,
         { method: 'DELETE' }
       ),
+
+    replaceMineWithPlaceholder: async (fileId: string, content: Uint8Array, metadataBase64: string) => {
+      const response = await rawRequest(`/files/me/${fileId}/placeholder`, {
+        method: 'PUT',
+        contentType: 'application/octet-stream',
+        headers: {
+          'x-file-metadata': metadataBase64
+        },
+        body: new Blob([Uint8Array.from(content).buffer], { type: 'application/octet-stream' })
+      });
+
+      return response.json() as Promise<{
+        file: ChatFileRecord;
+        quotaBytes: number;
+        usedBytes: number;
+      }>;
+    },
 
     downloadChatFileMetadata: async (chatId: string, fileId: string): Promise<DownloadedChatFileMetadata> => {
       const response = await request<{

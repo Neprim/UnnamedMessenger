@@ -54,6 +54,13 @@
               {#if chat.lastMessage}
                 {#if chat.lastMessage.isSystem}
                   <span class="last-message-system">{chat.lastMessage.content}</span>
+                {:else if !chat.lastMessage.content.trim() && chat.lastMessage.hasAttachments}
+                  <span class="last-message">
+                    {#if chat.lastMessage.senderUsername}
+                      {chat.lastMessage.senderUsername}:
+                    {/if}
+                    <em class="attachment-marker">&lt;вложение&gt;</em>
+                  </span>
                 {:else}
                   <span class="last-message">{chat.lastMessage.senderUsername ? `${chat.lastMessage.senderUsername}: ` : ''}{chat.lastMessage.content}</span>
                 {/if}
@@ -187,6 +194,10 @@
   .last-message {
     font-size: 12px;
     color: #666;
+  }
+
+  .attachment-marker {
+    font-style: italic;
   }
 
   .last-message-system {

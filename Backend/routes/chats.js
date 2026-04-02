@@ -51,6 +51,22 @@ function mapChatRow(chat) {
   };
 }
 
+function removeUserMessagesFromChat(chatId, userId) {
+  db.prepare('DELETE FROM messages WHERE chat_id = ? AND sender_id = ?').run(chatId, userId);
+}
+
+function removeUserFilesFromChat(chatId, userId) {
+  db.prepare(
+    `UPDATE chats
+     SET avatar_file_id = NULL
+     WHERE id = ? AND avatar_file_id IN (
+       SELECT id FROM files WHERE chat_id = ? AND uploaded_by = ?
+     )`
+  ).run(chatId, chatId, userId);
+
+  db.prepare('DELETE FROM files WHERE chat_id = ? AND uploaded_by = ?').run(chatId, userId);
+}
+
 router.get('/', authenticate, (req, res) => {
   try {
     const chats = db.prepare(`
@@ -311,6 +327,17 @@ router.post('/:chatId/leave', authenticate, (req, res) => {
       return res.status(400).json({ error: 'Creator cannot leave group chat' });
     }
     
+    const deleteOwnMessages = Boolean(req.body?.deleteMessages);
+    const deleteOwnFiles = Boolean(req.body?.deleteFiles);
+
+    if (deleteOwnMessages) {
+      removeUserMessagesFromChat(req.params.chatId, req.userId);
+    }
+
+    if (deleteOwnFiles) {
+      removeUserFilesFromChat(req.params.chatId, req.userId);
+    }
+
     db.prepare('DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?').run(req.params.chatId, req.userId);
     
     const user = db.prepare('SELECT username FROM users WHERE id = ?').get(req.userId);
@@ -394,7 +421,7 @@ router.post('/:chatId/members/add', authenticate, (req, res) => {
 
 router.post('/:chatId/members/remove', authenticate, (req, res) => {
   try {
-    const { userId } = req.body;
+    const { userId, deleteMessages, deleteFiles } = req.body;
     
     if (!userId) {
       return res.status(400).json({ error: 'userId required' });
@@ -422,6 +449,14 @@ router.post('/:chatId/members/remove', authenticate, (req, res) => {
       }
     }
     
+    if (Boolean(deleteMessages)) {
+      removeUserMessagesFromChat(req.params.chatId, userId);
+    }
+
+    if (Boolean(deleteFiles)) {
+      removeUserFilesFromChat(req.params.chatId, userId);
+    }
+
     db.prepare('DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?').run(req.params.chatId, userId);
     
     const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);

@@ -129,7 +129,8 @@ export function buildLastMessage(messages: Message[], members: ChatMember[] = []
     senderId: lastMessage.senderId,
     content: lastMessage.content,
     senderUsername: lastMessage.senderUsername ?? sender?.username ?? 'Unknown',
-    isSystem: false
+    isSystem: false,
+    hasAttachments: Array.isArray(lastMessage.fileIds) && lastMessage.fileIds.length > 0
   };
 }
 
@@ -166,7 +167,8 @@ export function parseFileMetadataJson(content: string): ChatFileMetadata | null 
       size: parsed.size,
       width: typeof parsed.width === 'number' ? parsed.width : undefined,
       height: typeof parsed.height === 'number' ? parsed.height : undefined,
-      duration: typeof parsed.duration === 'number' ? parsed.duration : undefined
+      duration: typeof parsed.duration === 'number' ? parsed.duration : undefined,
+      previewDataUrl: typeof parsed.previewDataUrl === 'string' ? parsed.previewDataUrl : undefined
     };
   } catch {
     return null;

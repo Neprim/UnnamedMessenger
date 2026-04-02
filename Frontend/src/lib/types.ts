@@ -21,6 +21,7 @@ export interface LastMessage {
   content: string;
   senderUsername?: string;
   isSystem: boolean;
+  hasAttachments?: boolean;
 }
 
 export interface Message {
@@ -51,6 +52,7 @@ export interface ChatFileMetadata {
   width?: number;
   height?: number;
   duration?: number;
+  previewDataUrl?: string;
 }
 
 export interface Chat {

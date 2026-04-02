@@ -10,6 +10,11 @@
   export let chatName = 'Чат';
   export let chatAvatarUrl: string | null | undefined = null;
   export let canAddMembers = false;
+  export let attachmentCounts: { images: number; documents: number; media: number } = {
+    images: 0,
+    documents: 0,
+    media: 0
+  };
 
   const dispatch = createEventDispatcher<{
     close: void;
@@ -19,6 +24,7 @@
     addMember: void;
     editAvatar: void;
     editName: void;
+    openattachments: { kind: 'images' | 'documents' | 'media' };
   }>();
 
   $: chatKindLabel = chatType === 'pm' ? 'Личный чат' : 'Групповой чат';
@@ -62,32 +68,33 @@
             <span id="chat-details-title" class="chat-title-text">{chatName}</span>
           </div>
         {/if}
-        <p>{chatKindLabel}
+        <p>
+          {chatKindLabel}
           {#if chatType === 'gm'}
-           · {members.length} {members.length === 1 ? 'участник' : members.length < 5 ? 'участника' : 'участников'}
+            · {members.length}
+            {members.length === 1 ? ' участник' : members.length < 5 ? ' участника' : ' участников'}
           {/if}
-          </p>
+        </p>
       </div>
     </div>
 
     <section class="section">
       <div class="section-header">
         <h4>Все вложения чата</h4>
-        <span>Скоро</span>
       </div>
 
       <div class="media-grid">
-        <button type="button" class="media-tile" disabled>
+        <button type="button" class="media-tile" on:click={() => dispatch('openattachments', { kind: 'images' })}>
           <strong>Изображения</strong>
-          <span>Просмотр всех фото и картинок, которыми делились в чате.</span>
+          <span>{attachmentCounts.images}</span>
         </button>
-        <button type="button" class="media-tile" disabled>
+        <button type="button" class="media-tile" on:click={() => dispatch('openattachments', { kind: 'documents' })}>
           <strong>Документы</strong>
-          <span>PDF, архивы, таблицы, заметки и остальные файлы.</span>
+          <span>{attachmentCounts.documents}</span>
         </button>
-        <button type="button" class="media-tile" disabled>
+        <button type="button" class="media-tile" on:click={() => dispatch('openattachments', { kind: 'media' })}>
           <strong>Аудио и видео</strong>
-          <span>Медиафайлы, голосовые и ролики в одном месте.</span>
+          <span>{attachmentCounts.media}</span>
         </button>
       </div>
     </section>
@@ -287,14 +294,6 @@
     color: #0f172a;
   }
 
-  .section-header span {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: #94a3b8;
-  }
-
   .media-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -305,7 +304,8 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 8px;
+    justify-content: space-between;
+    gap: 10px;
     min-height: 116px;
     padding: 16px;
     border-radius: 18px;
@@ -315,8 +315,7 @@
       radial-gradient(circle at top right, rgba(148, 163, 184, 0.18), transparent 60%);
     color: #334155;
     text-align: left;
-    cursor: default;
-    opacity: 1;
+    cursor: pointer;
   }
 
   .media-tile strong {
@@ -324,9 +323,17 @@
   }
 
   .media-tile span {
-    font-size: 13px;
-    line-height: 1.45;
+    font-size: 28px;
+    line-height: 1;
+    font-weight: 700;
     color: #64748b;
+  }
+
+  .media-tile:hover {
+    border-color: #bfdbfe;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(219, 234, 254, 0.88)),
+      radial-gradient(circle at top right, rgba(59, 130, 246, 0.16), transparent 60%);
   }
 
   .link-action {
