@@ -20,6 +20,13 @@ function broadcastToChatMembers(chatId, eventType, data, excludeUserId = null) {
   });
 }
 
+function getMessageFileIds(messageId) {
+  return db
+    .prepare('SELECT file_id FROM message_files WHERE message_id = ? ORDER BY position ASC')
+    .all(messageId)
+    .map((row) => row.file_id);
+}
+
 router.put('/:messageId', authenticate, (req, res) => {
   try {
     const { content } = req.body;
@@ -91,12 +98,41 @@ router.delete('/:messageId', authenticate, (req, res) => {
     if (!isMember) {
       return res.status(403).json({ error: 'Access denied' });
     }
+
+    const fileIds = getMessageFileIds(req.params.messageId);
+    const deleteMessage = db.prepare('DELETE FROM messages WHERE id = ?');
+    const countFileLinks = db.prepare('SELECT COUNT(*) as count FROM message_files WHERE file_id = ?');
+    const avatarUsage = db.prepare('SELECT 1 FROM chats WHERE avatar_file_id = ? LIMIT 1');
+    const deleteFile = db.prepare('DELETE FROM files WHERE id = ?');
+    const deletedFileIds = [];
+
+    db.transaction(() => {
+      deleteMessage.run(req.params.messageId);
+
+      for (const fileId of fileIds) {
+        const referencesCount = countFileLinks.get(fileId)?.count ?? 0;
+        if (referencesCount > 0) {
+          continue;
+        }
+
+        const isAvatarInUse = avatarUsage.get(fileId);
+        if (isAvatarInUse) {
+          continue;
+        }
+
+        deleteFile.run(fileId);
+        deletedFileIds.push(fileId);
+      }
+    })();
     
-    db.prepare('DELETE FROM messages WHERE id = ?').run(req.params.messageId);
+    broadcastToChatMembers(
+      message.chat_id,
+      'message_deleted',
+      { messageId: req.params.messageId, chatId: message.chat_id, deletedFileIds },
+      req.userId
+    );
     
-    broadcastToChatMembers(message.chat_id, 'message_deleted', { messageId: req.params.messageId, chatId: message.chat_id }, req.userId);
-    
-    res.json({ message: 'Message deleted' });
+    res.json({ message: 'Message deleted', deletedFileIds });
   } catch (err) {
     console.error('Delete message error:', err);
     res.status(500).json({ error: 'Internal server error' });

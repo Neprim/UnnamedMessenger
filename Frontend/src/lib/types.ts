@@ -30,6 +30,7 @@ export interface Message {
   senderId: string | null;
   content: string;
   fileIds: string[];
+  deletedFileIds?: string[];
   timestamp: number;
   editedAt: number | null;
   senderUsername?: string;

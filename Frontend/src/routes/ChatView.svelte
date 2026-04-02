@@ -2,12 +2,14 @@
   import { onDestroy, tick } from 'svelte';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
+  import { deletedFilesEvent } from '../lib/sse';
   import * as cryptoLib from '../lib/crypto';
   import { cacheFile, getCachedFile, invalidateCachedFile, type CachedFileAsset } from '../lib/file-cache';
   import MessageList from '../components/chat/MessageList.svelte';
   import MessageInput from '../components/chat/MessageInput.svelte';
   import ChatImagePickerModal from '../components/chat/ChatImagePickerModal.svelte';
   import ChatAttachmentBrowserModal from '../components/chat/ChatAttachmentBrowserModal.svelte';
+  import ChatImageCarouselModal from '../components/chat/ChatImageCarouselModal.svelte';
   import MembersModal from '../components/chat/MembersModal.svelte';
   import AvatarCropModal from '../components/settings/AvatarCropModal.svelte';
   import { getFavoriteChatImageIds, toggleFavoriteChatImage } from '../lib/chat-image-favorites';
@@ -26,8 +28,10 @@
   let showChatAvatarModal = false;
   let showImageLibraryModal = false;
   let showAttachmentBrowserModal = false;
+  let showImageCarouselModal = false;
   let showLeaveChatModal = false;
   let showRemoveMemberModal = false;
+  let showDeleteMessageModal = false;
   let userSearch = '';
   let searchResults: SearchUserResult[] = [];
   let searching = false;
@@ -56,9 +60,12 @@
     metadata: ChatFileMetadata;
     updatedAt: number;
   }> = [];
+  let imageCarouselItems: Array<{ fileId: string; src: string; name: string }> = [];
+  let activeCarouselFileId: string | null = null;
   let attachmentCounts = { images: 0, documents: 0, media: 0 };
   let selectedReusableAttachments: Array<{ id: string; fileId: string; name: string; size: number }> = [];
   let memberToRemove: ChatMember | null = null;
+  let messagePendingDeletionId: string | null = null;
   let leaveDeleteMessages = false;
   let leaveDeleteFiles = false;
   let removeDeleteMessages = false;
@@ -103,12 +110,14 @@
     string,
     Record<string, Awaited<ReturnType<typeof api.files.downloadChatFilesMetadata>>[number]>
   > = {};
+  let decryptedChatFileMetadataByChatId: Record<string, Record<string, ChatFileMetadata>> = {};
   let metadataLoadedChatIds = new Set<string>();
   let fileMetadataGeneration = 0;
   const imagePreviewResolutionInFlight = new Set<string>();
 
   const TYPING_THROTTLE_MS = 3000;
   const ERROR_TOAST_DURATION_MS = 4000;
+  const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 
   $: selectedChat = $chats.find((chat) => chat.id === params.id) ?? chatDetail;
   $: messages = selectedChat?.messages ?? [];
@@ -170,16 +179,33 @@
     };
   }
 
+  function rememberDecryptedChatFileMetadata(chatId: string, fileId: string, metadata: ChatFileMetadata) {
+    decryptedChatFileMetadataByChatId = {
+      ...decryptedChatFileMetadataByChatId,
+      [chatId]: {
+        ...(decryptedChatFileMetadataByChatId[chatId] ?? {}),
+        [fileId]: metadata
+      }
+    };
+  }
+
   function forgetChatFileMetadata(chatId: string, fileId: string) {
     const currentChatMetadata = chatFileMetadataByChatId[chatId];
-    if (!currentChatMetadata?.[fileId]) return;
+    const currentDecryptedMetadata = decryptedChatFileMetadataByChatId[chatId];
+    if (!currentChatMetadata?.[fileId] && !currentDecryptedMetadata?.[fileId]) return;
 
-    const nextChatMetadata = { ...currentChatMetadata };
+    const nextChatMetadata = { ...(currentChatMetadata ?? {}) };
     delete nextChatMetadata[fileId];
+    const nextDecryptedMetadata = { ...(currentDecryptedMetadata ?? {}) };
+    delete nextDecryptedMetadata[fileId];
 
     chatFileMetadataByChatId = {
       ...chatFileMetadataByChatId,
       [chatId]: nextChatMetadata
+    };
+    decryptedChatFileMetadataByChatId = {
+      ...decryptedChatFileMetadataByChatId,
+      [chatId]: nextDecryptedMetadata
     };
   }
 
@@ -192,6 +218,24 @@
     delete nextImagePreviews[fileId];
     imagePreviewById = nextImagePreviews;
     imagePreviewResolutionInFlight.delete(fileId);
+  }
+
+  async function cleanupDeletedFiles(chatId: string, fileIds: string[]) {
+    if (fileIds.length === 0) {
+      return;
+    }
+
+    await Promise.allSettled(fileIds.map((fileId) => invalidateCachedFile(fileId)));
+    fileIds.forEach((fileId) => {
+      forgetChatFileMetadata(chatId, fileId);
+      revokeFileAsset(fileId);
+    });
+
+    selectedReusableAttachments = selectedReusableAttachments.filter(
+      (attachment) => !fileIds.includes(attachment.fileId)
+    );
+    imageLibraryItems = imageLibraryItems.filter((item) => !fileIds.includes(item.fileId));
+    attachmentBrowserItems = attachmentBrowserItems.filter((item) => !fileIds.includes(item.fileId));
   }
 
   function resetFileCaches() {
@@ -442,7 +486,8 @@
 
   async function handleDeleteFromMenu() {
     if (contextMenu.messageId) {
-      await handleDeleteMessage(contextMenu.messageId);
+      messagePendingDeletionId = contextMenu.messageId;
+      showDeleteMessageModal = true;
     }
     closeContextMenu();
   }
@@ -653,6 +698,41 @@
     return allMetadata;
   }
 
+  async function ensureAllChatMetadataDecrypted(chatId: string, currentChatKey: CryptoKey) {
+    const existing = decryptedChatFileMetadataByChatId[chatId];
+    const encryptedMetadata = await ensureAllChatMetadataLoaded(chatId);
+    const missingEntries = Object.values(encryptedMetadata).filter(
+      (entry) => entry.fileId && !entry.deletedAt && !existing?.[entry.fileId]
+    );
+
+    if (existing && missingEntries.length === 0) {
+      return existing;
+    }
+
+    const nextDecrypted = { ...(existing ?? {}) };
+
+    for (const metadataEntry of missingEntries) {
+      if (!metadataEntry.fileId) continue;
+
+      const decryptedMetadataBytes = await cryptoLib.decryptBinary(
+        currentChatKey,
+        cryptoLib.base64ToBytes(metadataEntry.metadataBase64)
+      );
+      const metadataText = new TextDecoder().decode(decryptedMetadataBytes);
+      const metadata = parseFileMetadataJson(metadataText);
+      if (metadata) {
+        nextDecrypted[metadataEntry.fileId] = metadata;
+      }
+    }
+
+    decryptedChatFileMetadataByChatId = {
+      ...decryptedChatFileMetadataByChatId,
+      [chatId]: nextDecrypted
+    };
+
+    return nextDecrypted;
+  }
+
   function getAttachmentKind(type: string) {
     if (type.startsWith('image/')) {
       return 'images' as const;
@@ -666,20 +746,10 @@
   }
 
   async function loadChatAttachmentCounts(chatId: string, currentChatKey: CryptoKey) {
-    const allMetadata = await ensureAllChatMetadataLoaded(chatId);
+    const allMetadata = await ensureAllChatMetadataDecrypted(chatId, currentChatKey);
     const nextCounts = { images: 0, documents: 0, media: 0 };
 
-    for (const metadataEntry of Object.values(allMetadata)) {
-      if (!metadataEntry.fileId || metadataEntry.deletedAt) {
-        continue;
-      }
-
-      const decryptedMetadataBytes = await cryptoLib.decryptBinary(
-        currentChatKey,
-        cryptoLib.base64ToBytes(metadataEntry.metadataBase64)
-      );
-      const metadataText = new TextDecoder().decode(decryptedMetadataBytes);
-      const metadata = parseFileMetadataJson(metadataText);
+    for (const metadata of Object.values(allMetadata)) {
       if (!metadata) {
         continue;
       }
@@ -696,18 +766,14 @@
     kind: 'images' | 'documents' | 'media'
   ) {
     const allMetadata = await ensureAllChatMetadataLoaded(chatId);
+    const decryptedMetadataById = await ensureAllChatMetadataDecrypted(chatId, currentChatKey);
     const nextItems = await Promise.all(
       Object.values(allMetadata).map(async (metadataEntry) => {
         if (!metadataEntry.fileId || metadataEntry.deletedAt) {
           return null;
         }
 
-        const decryptedMetadataBytes = await cryptoLib.decryptBinary(
-          currentChatKey,
-          cryptoLib.base64ToBytes(metadataEntry.metadataBase64)
-        );
-        const metadataText = new TextDecoder().decode(decryptedMetadataBytes);
-        const metadata = parseFileMetadataJson(metadataText);
+        const metadata = decryptedMetadataById[metadataEntry.fileId];
         if (!metadata || getAttachmentKind(metadata.type) !== kind) {
           return null;
         }
@@ -780,6 +846,88 @@
     return file.size + metadataBytes.length + 56;
   }
 
+  function getSelectedAttachmentCount() {
+    return pendingAttachments.length + selectedReusableAttachments.length;
+  }
+
+  function bytesEqual(left: Uint8Array, right: Uint8Array) {
+    if (left.length !== right.length) {
+      return false;
+    }
+
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] !== right[index]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  async function getChatFileContentBytes(
+    chatId: string,
+    currentChatKey: CryptoKey,
+    fileId: string,
+    metadata: ChatFileMetadata,
+    updatedAt: number
+  ) {
+    const asset = await ensureChatFileAsset(chatId, currentChatKey, fileId, metadata, updatedAt);
+    const response = await fetch(asset.objectUrl);
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  async function findDuplicateChatFile(
+    chatId: string,
+    currentChatKey: CryptoKey,
+    file: File,
+    metadata: ChatFileMetadata
+  ): Promise<{ fileId: string; metadata: ChatFileMetadata } | null> {
+    const encryptedMetadataById = await ensureAllChatMetadataLoaded(chatId);
+    const decryptedMetadataById = await ensureAllChatMetadataDecrypted(chatId, currentChatKey);
+    const candidateEntries = Object.values(encryptedMetadataById).filter((entry) => {
+      if (!entry.fileId || entry.deletedAt) {
+        return false;
+      }
+
+      const existingMetadata = decryptedMetadataById[entry.fileId];
+      return existingMetadata?.type === metadata.type && existingMetadata.size === metadata.size;
+    });
+
+    if (candidateEntries.length === 0) {
+      return null;
+    }
+
+    const sourceBytes = new Uint8Array(await file.arrayBuffer());
+
+    for (const candidateEntry of candidateEntries) {
+      if (!candidateEntry.fileId) {
+        continue;
+      }
+
+      const candidateMetadata = decryptedMetadataById[candidateEntry.fileId];
+      if (!candidateMetadata) {
+        continue;
+      }
+
+      const candidateBytes = await getChatFileContentBytes(
+        chatId,
+        currentChatKey,
+        candidateEntry.fileId,
+        candidateMetadata,
+        candidateEntry.updatedAt
+      );
+
+      if (bytesEqual(sourceBytes, candidateBytes)) {
+        return {
+          fileId: candidateEntry.fileId,
+          metadata: candidateMetadata
+        };
+      }
+    }
+
+    return null;
+  }
+
   async function openImageLibrary() {
     if (!selectedChat?.id || !chatKey) {
       error = 'Ключ чата недоступен';
@@ -791,6 +939,7 @@
 
     try {
       const allMetadata = await ensureAllChatMetadataLoaded(selectedChat.id);
+      const decryptedMetadataById = await ensureAllChatMetadataDecrypted(selectedChat.id, chatKey);
       const favoriteIds = new Set(getFavoriteChatImageIds(selectedChat.id));
       const nextItems = await Promise.all(
         Object.values(allMetadata).map(async (metadataEntry) => {
@@ -798,12 +947,7 @@
             return null;
           }
 
-          const decryptedMetadataBytes = await cryptoLib.decryptBinary(
-            chatKey,
-            cryptoLib.base64ToBytes(metadataEntry.metadataBase64)
-          );
-          const metadataText = new TextDecoder().decode(decryptedMetadataBytes);
-          const metadata = parseFileMetadataJson(metadataText);
+          const metadata = decryptedMetadataById[metadataEntry.fileId];
           if (!metadata || !metadata.type.startsWith('image/')) {
             return null;
           }
@@ -869,6 +1013,10 @@
   async function handleSendMessage() {
     clearError();
     if ((!newMessage.trim() && pendingAttachments.length === 0 && selectedReusableAttachments.length === 0) || sending || !chatKey) return;
+    if (getSelectedAttachmentCount() > MAX_ATTACHMENTS_PER_MESSAGE) {
+      error = `К сообщению можно прикрепить не более ${MAX_ATTACHMENTS_PER_MESSAGE} вложений`;
+      return;
+    }
 
     sending = true;
     pendingAttachments = pendingAttachments.map((attachment) => ({ ...attachment, uploading: true }));
@@ -897,6 +1045,7 @@
           createdAt: uploaded.file.createdAt,
           deletedAt: uploaded.file.deletedAt
         });
+        rememberDecryptedChatFileMetadata(params.id, uploaded.file.id, fileMetadata);
         await cacheFile(uploaded.file.id, attachment.file, {
           type: fileMetadata.type,
           name: fileMetadata.name,
@@ -933,7 +1082,8 @@
 
   async function handleDeleteMessage(messageId: string) {
     try {
-      await chats.deleteMessage(params.id, messageId);
+      const result = await chats.deleteMessage(params.id, messageId);
+      await cleanupDeletedFiles(params.id, result?.deletedFileIds ?? []);
     } catch (exception) {
       error = exception instanceof Error ? exception.message : 'Не удалось удалить сообщение';
     }
@@ -941,10 +1091,17 @@
 
   async function handleFilePick(files: File[]) {
     clearError();
+    const currentAttachmentCount = getSelectedAttachmentCount();
+    if (currentAttachmentCount >= MAX_ATTACHMENTS_PER_MESSAGE) {
+      error = `К сообщению можно прикрепить не более ${MAX_ATTACHMENTS_PER_MESSAGE} вложений`;
+      return;
+    }
+
     let quota: Awaited<ReturnType<typeof api.files.listMine>>;
     let reservedBytes = pendingAttachments.reduce((total, attachment) => total + attachment.estimatedStoredSize, 0);
     const acceptedAttachments: PendingAttachment[] = [];
     const rejectedFiles: string[] = [];
+    let remainingSlots = MAX_ATTACHMENTS_PER_MESSAGE - currentAttachmentCount;
     if (!selectedChat?.chatKey || !selectedChat.id) {
       error = 'Ключ чата недоступен';
       return;
@@ -958,7 +1115,30 @@
     }
 
     for (const file of files) {
+      if (remainingSlots <= 0) {
+        rejectedFiles.push(file.name);
+        continue;
+      }
+
       const metadata = await buildFileMetadata(file);
+      const duplicateMatch = await findDuplicateChatFile(selectedChat.id, selectedChat.chatKey, file, metadata);
+      if (duplicateMatch) {
+        const alreadySelected = selectedReusableAttachments.some((attachment) => attachment.fileId === duplicateMatch.fileId);
+        if (!alreadySelected) {
+          selectedReusableAttachments = [
+            ...selectedReusableAttachments,
+            {
+              id: `reuse:${duplicateMatch.fileId}`,
+              fileId: duplicateMatch.fileId,
+              name: duplicateMatch.metadata.name,
+              size: duplicateMatch.metadata.size
+            }
+          ];
+          remainingSlots -= 1;
+        }
+        continue;
+      }
+
       const estimatedStoredSize = estimateStoredFileSize(metadata, file);
       if (quota.usedBytes + reservedBytes + estimatedStoredSize > quota.quotaBytes) {
         rejectedFiles.push(file.name);
@@ -975,6 +1155,7 @@
         metadata,
         uploading: false
       });
+      remainingSlots -= 1;
     }
 
     if (acceptedAttachments.length > 0) {
@@ -989,6 +1170,15 @@
     }
   }
 
+  async function confirmDeleteMessage() {
+    if (!messagePendingDeletionId) return;
+
+    const messageId = messagePendingDeletionId;
+    showDeleteMessageModal = false;
+    messagePendingDeletionId = null;
+    await handleDeleteMessage(messageId);
+  }
+
   function toggleReusableImage(fileId: string) {
     const item = imageLibraryItems.find((entry) => entry.fileId === fileId);
     if (!item) return;
@@ -996,6 +1186,11 @@
     const existing = selectedReusableAttachments.find((attachment) => attachment.fileId === fileId);
     if (existing) {
       selectedReusableAttachments = selectedReusableAttachments.filter((attachment) => attachment.fileId !== fileId);
+      return;
+    }
+
+    if (getSelectedAttachmentCount() >= MAX_ATTACHMENTS_PER_MESSAGE) {
+      error = `К сообщению можно прикрепить не более ${MAX_ATTACHMENTS_PER_MESSAGE} вложений`;
       return;
     }
 
@@ -1104,6 +1299,8 @@
             };
             return;
           }
+
+          rememberDecryptedChatFileMetadata(chatId, fileId, metadata);
 
           fileDisplayById = {
             ...fileDisplayById,
@@ -1237,10 +1434,20 @@
       return;
     }
 
-    const isPreviewable =
-      asset.type.startsWith('image/') ||
-      asset.type === 'application/pdf' ||
-      asset.type.startsWith('text/');
+    if (asset.type.startsWith('image/')) {
+      imageCarouselItems = [
+        {
+          fileId,
+          src: asset.objectUrl,
+          name: asset.name
+        }
+      ];
+      activeCarouselFileId = fileId;
+      showImageCarouselModal = true;
+      return;
+    }
+
+    const isPreviewable = asset.type === 'application/pdf' || asset.type.startsWith('text/');
 
     if (isPreviewable) {
       window.open(asset.objectUrl, '_blank', 'noopener,noreferrer');
@@ -1253,6 +1460,41 @@
     document.body.appendChild(link);
     link.click();
     link.remove();
+  }
+
+  function handleOpenMessageFile(fileId: string, messageFileIds: string[]) {
+    const asset = fileAssetById[fileId];
+    const display = fileDisplayById[fileId];
+    if (!asset || display?.status !== 'ready') {
+      return;
+    }
+
+    if (asset.type.startsWith('image/')) {
+      const imageItems = messageFileIds
+        .map((messageFileId) => {
+          const relatedAsset = fileAssetById[messageFileId];
+          const relatedDisplay = fileDisplayById[messageFileId];
+          if (!relatedAsset || relatedDisplay?.status !== 'ready' || !relatedAsset.type.startsWith('image/')) {
+            return null;
+          }
+
+          return {
+            fileId: messageFileId,
+            src: relatedAsset.objectUrl,
+            name: relatedAsset.name
+          };
+        })
+        .filter(
+          (item): item is { fileId: string; src: string; name: string } => Boolean(item)
+        );
+
+      imageCarouselItems = imageItems.length > 0 ? imageItems : [{ fileId, src: asset.objectUrl, name: asset.name }];
+      activeCarouselFileId = fileId;
+      showImageCarouselModal = true;
+      return;
+    }
+
+    handleOpenFile(fileId);
   }
 
   async function searchUsers() {
@@ -1386,7 +1628,10 @@
     imageLibraryItems = [];
     showImageLibraryModal = false;
     showAttachmentBrowserModal = false;
+    showImageCarouselModal = false;
     attachmentBrowserItems = [];
+    imageCarouselItems = [];
+    activeCarouselFileId = null;
     attachmentCounts = { images: 0, documents: 0, media: 0 };
     resetFileCaches();
     chats
@@ -1412,9 +1657,19 @@
     });
   }
 
+  const unsubscribeDeletedFilesEvent = deletedFilesEvent.subscribe((event) => {
+    if (!event || !selectedChat?.id || event.chatId !== selectedChat.id) {
+      return;
+    }
+
+    cleanupDeletedFiles(event.chatId, event.fileIds).catch(() => {});
+    deletedFilesEvent.set(null);
+  });
+
   onDestroy(() => {
     if (scrollTimeout) clearTimeout(scrollTimeout);
     if (errorTimeout) clearTimeout(errorTimeout);
+    unsubscribeDeletedFilesEvent();
     resetFileCaches();
   });
 </script>
@@ -1459,9 +1714,10 @@
       {memberAvatarUrls}
       fileDisplayById={fileDisplayById}
       imagePreviewById={imagePreviewById}
+      fileAssetById={fileAssetById}
       unreadMarkerId={selectedChat?.unreadMarkerId}
       on:scroll={handleContainerScroll}
-      on:fileclick={(event) => handleOpenFile(event.detail.fileId)}
+      on:fileclick={(event) => handleOpenMessageFile(event.detail.fileId, event.detail.messageFileIds)}
       on:messagecontextmenu={(event) => handleContextMenu(event.detail.event, event.detail.messageId, event.detail.senderId)}
     />
 
@@ -1695,6 +1951,18 @@
   />
 {/if}
 
+{#if showImageCarouselModal}
+  <ChatImageCarouselModal
+    items={imageCarouselItems}
+    currentFileId={activeCarouselFileId}
+    on:close={() => {
+      showImageCarouselModal = false;
+      imageCarouselItems = [];
+      activeCarouselFileId = null;
+    }}
+  />
+{/if}
+
 {#if showLeaveChatModal}
   <div class="modal-shell">
     <button class="modal-overlay" type="button" aria-label="Закрыть окно выхода из чата" on:click={() => (showLeaveChatModal = false)}></button>
@@ -1738,6 +2006,36 @@
         <button type="button" class="danger-action" disabled={removingMember} on:click={handleConfirmRemoveMember}>
           {removingMember ? 'Удаление...' : 'Удалить пользователя'}
         </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showDeleteMessageModal}
+  <div class="modal-shell">
+    <button
+      class="modal-overlay"
+      type="button"
+      aria-label="Закрыть окно удаления сообщения"
+      on:click={() => {
+        showDeleteMessageModal = false;
+        messagePendingDeletionId = null;
+      }}
+    ></button>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-message-title">
+      <h3 id="delete-message-title">Удалить сообщение</h3>
+      <p class="modal-copy">Сообщение будет удалено. Если его вложения больше нигде не используются, они тоже будут удалены.</p>
+      <div class="modal-actions">
+        <button
+          type="button"
+          on:click={() => {
+            showDeleteMessageModal = false;
+            messagePendingDeletionId = null;
+          }}
+        >
+          Отмена
+        </button>
+        <button type="button" class="danger-action" on:click={confirmDeleteMessage}>Удалить</button>
       </div>
     </div>
   </div>

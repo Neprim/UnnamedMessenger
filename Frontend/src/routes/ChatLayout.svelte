@@ -3,7 +3,7 @@
   import { push } from 'svelte-spa-router';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
-  import { chatDeletedEvent, chatUpdatedEvent, memberEvent, sseMessage, typingEvent } from '../lib/sse';
+  import { chatDeletedEvent, chatUpdatedEvent, deletedFilesEvent, memberEvent, sseMessage, typingEvent } from '../lib/sse';
   import * as crypto from '../lib/crypto';
   import ChatSidebar from '../components/chat/ChatSidebar.svelte';
   import CreateChatModal from '../components/chat/CreateChatModal.svelte';
@@ -88,6 +88,7 @@
   let unsubscribeChatDeleted: (() => void) | undefined;
   let unsubscribeSSE: (() => void) | undefined;
   let unsubscribeTypingEvent: (() => void) | undefined;
+  let unsubscribeDeletedFiles: (() => void) | undefined;
   let unsubscribeChatUpdated: (() => void) | undefined;
   let previousSelectedChatId: string | null = null;
 
@@ -657,19 +658,20 @@
       chatDeletedEvent.set(null);
     });
 
-    let lastProcessedMessageId = '';
+    let lastProcessedMessageKey = '';
     unsubscribeSSE = sseMessage.subscribe(async (event) => {
       if (!event || !event.message || !event.chatId) {
         sseMessage.set(null);
         return;
       }
 
-      if (event.message.id === lastProcessedMessageId) {
+      const messageKey = `${event.eventType}:${event.message.id}`;
+      if (messageKey === lastProcessedMessageKey) {
         sseMessage.set(null);
         return;
       }
 
-      lastProcessedMessageId = event.message.id;
+      lastProcessedMessageKey = messageKey;
 
       try {
         await chats.applyIncomingEvent(event.chatId, event.message, selectedChatId);
@@ -682,6 +684,11 @@
       if (!event) return;
       chats.handleTypingEvent(event.chatId, event.userId);
       typingEvent.set(null);
+    });
+
+    unsubscribeDeletedFiles = deletedFilesEvent.subscribe((event) => {
+      if (!event) return;
+      deletedFilesEvent.set(null);
     });
 
     unsubscribeChatUpdated = chatUpdatedEvent.subscribe((chatId) => {
@@ -698,6 +705,7 @@
     unsubscribeChatDeleted?.();
     unsubscribeSSE?.();
     unsubscribeTypingEvent?.();
+    unsubscribeDeletedFiles?.();
     unsubscribeChatUpdated?.();
   });
 </script>
@@ -868,7 +876,7 @@
         </div>
       {:else}
         <p class="modal-copy">
-          Файл <strong>{filePendingDeletion.name}</strong> будет удалён полностью без заглушки.
+          Файл <strong>{filePendingDeletion.name}</strong> будет удалён полностью.
         </p>
         <div class="modal-actions">
           <button

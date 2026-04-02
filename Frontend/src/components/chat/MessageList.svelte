@@ -40,11 +40,20 @@
       alt: string;
     }
   > = {};
+  export let fileAssetById: Record<
+    string,
+    {
+      objectUrl: string;
+      type: string;
+      name: string;
+      updatedAt: number;
+    }
+  > = {};
 
   const dispatch = createEventDispatcher<{
     scroll: Event;
     messagecontextmenu: { event: MouseEvent; messageId: string; senderId: string | null };
-    fileclick: { fileId: string };
+    fileclick: { fileId: string; messageFileIds: string[] };
   }>();
 </script>
 
@@ -97,64 +106,83 @@
                 {/if}
                 {#if msg.fileIds.length > 0}
                   <div class="message-files" class:with-text={Boolean(msg.content)}>
-                  {#each msg.fileIds as fileId}
-                    {@const fileDisplay = fileDisplayById[fileId]}
-                    {@const imagePreview = imagePreviewById[fileId]}
-                    {#if fileDisplay?.status === 'ready' && imagePreview}
-                      <button
-                        type="button"
-                        class="image-preview-button"
-                        on:click={() => dispatch('fileclick', { fileId })}
-                        aria-label={`Открыть изображение ${imagePreview.alt}`}
-                      >
-                        <img
-                          class="image-preview"
-                          src={imagePreview.objectUrl}
-                          alt={imagePreview.alt}
-                          width={imagePreview.width}
-                          height={imagePreview.height}
-                        />
-                      </button>
-                    {:else if fileDisplay?.type?.startsWith('image/') && fileDisplay.previewDataUrl}
-                      <div
-                        class="image-preview-fallback-wrap"
-                        style={`width:${fileDisplay.previewWidth || 48}px;height:${fileDisplay.previewHeight || 48}px;`}
-                      >
-                        <img
-                          class="image-preview image-preview-fallback"
-                          src={fileDisplay.previewDataUrl}
-                          alt={fileDisplay.name || 'Мини-превью вложения'}
-                          width={fileDisplay.previewWidth || 48}
-                          height={fileDisplay.previewHeight || 48}
+                    {#each msg.fileIds as fileId}
+                      {@const fileDisplay = fileDisplayById[fileId]}
+                      {@const imagePreview = imagePreviewById[fileId]}
+                      {@const fileAsset = fileAssetById[fileId]}
+
+                      {#if fileDisplay?.status === 'ready' && imagePreview}
+                        <button
+                          type="button"
+                          class="image-preview-button"
+                          on:click={() => dispatch('fileclick', { fileId, messageFileIds: msg.fileIds })}
+                          aria-label={`Открыть изображение ${imagePreview.alt}`}
+                        >
+                          <img
+                            class="image-preview"
+                            src={imagePreview.objectUrl}
+                            alt={imagePreview.alt}
+                            width={imagePreview.width}
+                            height={imagePreview.height}
+                          />
+                        </button>
+                      {:else if fileDisplay?.status === 'ready' && fileAsset && fileAsset.type.startsWith('video/')}
+                        <!-- svelte-ignore a11y_media_has_caption -->
+                        <video
+                          class="video-preview"
+                          controls
+                          preload="metadata"
+                          src={fileAsset.objectUrl}
+                          title={fileDisplay.name || 'Видео'}
+                        ></video>
+                      {:else if fileDisplay?.status === 'ready' && fileAsset && fileAsset.type.startsWith('audio/')}
+                        <audio
+                          class="audio-preview"
+                          controls
+                          preload="metadata"
+                          src={fileAsset.objectUrl}
+                          title={fileDisplay.name || 'Аудио'}
+                        ></audio>
+                      {:else if fileDisplay?.type?.startsWith('image/') && fileDisplay.previewDataUrl}
+                        <div
+                          class="image-preview-fallback-wrap"
                           style={`width:${fileDisplay.previewWidth || 48}px;height:${fileDisplay.previewHeight || 48}px;`}
-                        />
-                      </div>
-                    {:else}
-                      <button
-                        type="button"
-                        class="file-chip"
-                        class:file-chip-missing={fileDisplay?.status === 'missing'}
-                        title={fileDisplay?.type || fileId}
-                        disabled={fileDisplay?.status !== 'ready'}
-                        on:click={() => dispatch('fileclick', { fileId })}
-                      >
-                        {#if fileDisplay?.status === 'ready'}
-                          {fileDisplay.name}
-                          {#if fileDisplay.sizeLabel}
-                            ({fileDisplay.sizeLabel})
+                        >
+                          <img
+                            class="image-preview image-preview-fallback"
+                            src={fileDisplay.previewDataUrl}
+                            alt={fileDisplay.name || 'Мини-превью вложения'}
+                            width={fileDisplay.previewWidth || 48}
+                            height={fileDisplay.previewHeight || 48}
+                            style={`width:${fileDisplay.previewWidth || 48}px;height:${fileDisplay.previewHeight || 48}px;`}
+                          />
+                        </div>
+                      {:else}
+                        <button
+                          type="button"
+                          class="file-chip"
+                          class:file-chip-missing={fileDisplay?.status === 'missing'}
+                          title={fileDisplay?.type || fileId}
+                          disabled={fileDisplay?.status !== 'ready'}
+                          on:click={() => dispatch('fileclick', { fileId, messageFileIds: msg.fileIds })}
+                        >
+                          {#if fileDisplay?.status === 'ready'}
+                            {fileDisplay.name}
+                            {#if fileDisplay.sizeLabel}
+                              ({fileDisplay.sizeLabel})
+                            {/if}
+                          {:else if fileDisplay?.status === 'loading'}
+                            Загрузка файла...
+                          {:else if fileDisplay?.status === 'missing'}
+                            Файл удалён
+                          {:else if fileDisplay?.status === 'error'}
+                            Ошибка загрузки файла
+                          {:else}
+                            Файл {fileId.slice(0, 8)}
                           {/if}
-                        {:else if fileDisplay?.status === 'loading'}
-                          Загрузка файла...
-                        {:else if fileDisplay?.status === 'missing'}
-                          Файл удалён
-                        {:else if fileDisplay?.status === 'error'}
-                          Ошибка загрузки файла
-                        {:else}
-                          Файл {fileId.slice(0, 8)}
-                        {/if}
-                      </button>
-                    {/if}
-                  {/each}
+                        </button>
+                      {/if}
+                    {/each}
                   </div>
                 {/if}
               </div>
@@ -375,6 +403,21 @@
   .image-preview-fallback {
     box-shadow: none;
     image-rendering: auto;
+  }
+
+  .video-preview {
+    display: block;
+    width: min(320px, 100%);
+    max-height: 320px;
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.92);
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.14);
+  }
+
+  .audio-preview {
+    display: block;
+    width: min(320px, calc(100vw - 120px));
+    max-width: 100%;
   }
 
   .msg-time {

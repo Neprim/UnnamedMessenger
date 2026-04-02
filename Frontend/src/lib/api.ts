@@ -227,7 +227,7 @@ export const api = {
       }),
     
     delete: (messageId: string) => 
-      request<{ message: string }>(`/messages/${messageId}`, { method: 'DELETE' })
+      request<{ message: string; deletedFileIds?: string[] }>(`/messages/${messageId}`, { method: 'DELETE' })
   },
 
   files: {

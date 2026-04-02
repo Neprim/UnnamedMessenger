@@ -401,7 +401,7 @@ function createChatsStore() {
       return updatedMessage;
     },
     deleteMessage: async (chatId: string, messageId: string) => {
-      await api.messages.delete(messageId);
+      const result = await api.messages.delete(messageId);
 
       update((chatList) =>
         chatList.map((item) => {
@@ -415,6 +415,10 @@ function createChatsStore() {
           };
         })
       );
+
+      return {
+        deletedFileIds: result.deletedFileIds ?? []
+      };
     },
     createChat: async (data: {
       type: CreateChatRequest['type'];

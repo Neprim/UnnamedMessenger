@@ -1,4 +1,5 @@
 const db = require('../db');
+const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 
 function normalizeFileIds(fileIds) {
   if (!Array.isArray(fileIds)) {
@@ -33,6 +34,14 @@ function validateAttachableFileIds(chatId, fileIds) {
   const normalizedFileIds = normalizeFileIds(fileIds);
   if (normalizedFileIds.length === 0) {
     return { ok: true, fileIds: [] };
+  }
+
+  if (normalizedFileIds.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+    return {
+      ok: false,
+      error: `Message can contain at most ${MAX_ATTACHMENTS_PER_MESSAGE} file attachments`,
+      invalidFileIds: normalizedFileIds.slice(MAX_ATTACHMENTS_PER_MESSAGE)
+    };
   }
 
   const uniqueFileIds = Array.from(new Set(normalizedFileIds));

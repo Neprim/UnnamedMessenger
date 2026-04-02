@@ -8,7 +8,8 @@ export interface SSEEvent {
 
 export const sseEvents = writable<SSEEvent | null>(null);
 
-export const sseMessage = writable<{ chatId: string; message: Message } | null>(null);
+export const sseMessage = writable<{ chatId: string; eventType: 'new_message' | 'message_deleted' | 'message_edited'; message: Message } | null>(null);
+export const deletedFilesEvent = writable<{ chatId: string; fileIds: string[] } | null>(null);
 
 export const memberEvent = writable<{ type: string; chatId: string; userId: string; memberCount: number; removed?: boolean } | null>(null);
 
@@ -60,18 +61,26 @@ function handleSSEEvent(event: SSEEvent) {
     case 'new_message': {
       const message: Message = event.data;
       if (message.chatId) {
-        sseMessage.set({ chatId: message.chatId, message });
+        sseMessage.set({ chatId: message.chatId, eventType: 'new_message', message });
       }
       break;
     }
     case 'message_deleted': {
-      sseMessage.set({ chatId: event.data.chatId, message: { id: event.data.messageId } as Message });
+      const deletedFileIds = Array.isArray(event.data.deletedFileIds) ? event.data.deletedFileIds : [];
+      sseMessage.set({
+        chatId: event.data.chatId,
+        eventType: 'message_deleted',
+        message: { id: event.data.messageId, deletedFileIds } as Message
+      });
+      if (deletedFileIds.length > 0) {
+        deletedFilesEvent.set({ chatId: event.data.chatId, fileIds: deletedFileIds });
+      }
       break;
     }
     case 'message_edited': {
       const message: Message = event.data;
       if (message.chatId) {
-        sseMessage.set({ chatId: message.chatId, message });
+        sseMessage.set({ chatId: message.chatId, eventType: 'message_edited', message });
       }
       break;
     }
@@ -86,7 +95,7 @@ function handleSSEEvent(event: SSEEvent) {
         memberCount: data.memberCount,
         removed: data.removed
       });
-      sseMessage.set({ chatId: data.message.chatId, message: data.message });
+      sseMessage.set({ chatId: data.message.chatId, eventType: 'new_message', message: data.message });
       break;
     }
     case 'chat_deleted': {
