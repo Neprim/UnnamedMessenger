@@ -28,6 +28,15 @@
       deletedAt?: number | null;
     }
   > = {};
+  export let imagePreviewById: Record<
+    string,
+    {
+      objectUrl: string;
+      width: number;
+      height: number;
+      alt: string;
+    }
+  > = {};
 
   const dispatch = createEventDispatcher<{
     scroll: Event;
@@ -50,7 +59,7 @@
           {new Date(group.messages[0].timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </span>
       </div>
-      {:else}
+    {:else}
       <div class="message-group">
         <div class="message-header">
           <Avatar
@@ -68,45 +77,71 @@
               <span class="unread-line"></span>
             </div>
           {/if}
-          <div
-            class="message"
-            class:own={msg.senderId === currentUserId}
-            data-message-id={msg.id}
-            role="button"
-            tabindex="0"
-            on:contextmenu={(event) => dispatch('messagecontextmenu', { event, messageId: msg.id, senderId: msg.senderId })}
-          >
-            <div class="message-content">{msg.content}</div>
-            {#if msg.fileIds.length > 0}
-              <div class="message-files">
-                {#each msg.fileIds as fileId}
-                  {@const fileDisplay = fileDisplayById[fileId]}
-                  <button
-                    type="button"
-                    class="file-chip"
-                    class:file-chip-missing={fileDisplay?.status === 'missing'}
-                    title={fileDisplay?.type || fileId}
-                    disabled={fileDisplay?.status !== 'ready'}
-                    on:click={() => dispatch('fileclick', { fileId })}
-                  >
-                    {#if fileDisplay?.status === 'ready'}
-                      {fileDisplay.name}
-                      {#if fileDisplay.sizeLabel}
-                        ({fileDisplay.sizeLabel})
-                      {/if}
-                    {:else if fileDisplay?.status === 'loading'}
-                      Загрузка файла...
-                    {:else if fileDisplay?.status === 'missing'}
-                      Файл удалён
-                    {:else if fileDisplay?.status === 'error'}
-                      Ошибка загрузки файла
+          <div class="message-row" class:own={msg.senderId === currentUserId}>
+            <div
+              class="message"
+              class:file-only={!msg.content && msg.fileIds.length > 0}
+              data-message-id={msg.id}
+              role="button"
+              tabindex="0"
+              on:contextmenu={(event) => dispatch('messagecontextmenu', { event, messageId: msg.id, senderId: msg.senderId })}
+            >
+              <div class="message-body" class:own={msg.senderId === currentUserId} class:file-only={!msg.content && msg.fileIds.length > 0}>
+                {#if msg.content}
+                  <div class="message-text-area">
+                    <div class="message-content">{msg.content}</div>
+                  </div>
+                {/if}
+                {#if msg.fileIds.length > 0}
+                  <div class="message-files" class:with-text={Boolean(msg.content)}>
+                  {#each msg.fileIds as fileId}
+                    {@const fileDisplay = fileDisplayById[fileId]}
+                    {@const imagePreview = imagePreviewById[fileId]}
+                    {#if fileDisplay?.status === 'ready' && imagePreview}
+                      <button
+                        type="button"
+                        class="image-preview-button"
+                        on:click={() => dispatch('fileclick', { fileId })}
+                        aria-label={`Открыть изображение ${imagePreview.alt}`}
+                      >
+                        <img
+                          class="image-preview"
+                          src={imagePreview.objectUrl}
+                          alt={imagePreview.alt}
+                          width={imagePreview.width}
+                          height={imagePreview.height}
+                        />
+                      </button>
                     {:else}
-                      Файл {fileId.slice(0, 8)}
+                      <button
+                        type="button"
+                        class="file-chip"
+                        class:file-chip-missing={fileDisplay?.status === 'missing'}
+                        title={fileDisplay?.type || fileId}
+                        disabled={fileDisplay?.status !== 'ready'}
+                        on:click={() => dispatch('fileclick', { fileId })}
+                      >
+                        {#if fileDisplay?.status === 'ready'}
+                          {fileDisplay.name}
+                          {#if fileDisplay.sizeLabel}
+                            ({fileDisplay.sizeLabel})
+                          {/if}
+                        {:else if fileDisplay?.status === 'loading'}
+                          Загрузка файла...
+                        {:else if fileDisplay?.status === 'missing'}
+                          Файл удалён
+                        {:else if fileDisplay?.status === 'error'}
+                          Ошибка загрузки файла
+                        {:else}
+                          Файл {fileId.slice(0, 8)}
+                        {/if}
+                      </button>
                     {/if}
-                  </button>
-                {/each}
+                  {/each}
+                  </div>
+                {/if}
               </div>
-            {/if}
+            </div>
             <span class="msg-time" title={new Date(msg.timestamp * 1000).toLocaleString()}>
               {new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               {#if msg.editedAt}
@@ -202,35 +237,74 @@
     font-size: 14px;
   }
 
-  .message {
-    align-self: flex-start;
-    background: #f5f5f5;
-    max-width: 55%;
-    padding: 10px 14px;
-    border-radius: 16px;
-    position: relative;
+  .message-row {
     display: flex;
     align-items: flex-end;
     gap: 8px;
-    border: none;
+    align-self: flex-start;
+    max-width: 55%;
   }
 
-  .message.own {
+  .message-row.own {
+    align-self: flex-start;
+  }
+
+  .message {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    min-width: 0;
+  }
+
+  .message-body {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    background: #f5f5f5;
+    border-radius: 16px;
+    border: none;
+    min-width: 0;
+  }
+
+  .message-body.own {
     background: #e3f2fd;
   }
 
+  .message-body.file-only {
+    background: transparent;
+    border-radius: 0;
+  }
+
+  .message-text-area {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 14px;
+    min-width: 0;
+  }
+
+  .message-body:not(.file-only) .message-text-area {
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+  }
+
   .message-content {
-    word-wrap: break-word;
+    overflow-wrap: anywhere;
+    word-break: break-word;
     font-size: 15px;
     line-height: 1.4;
-    flex: 1;
+    min-width: 0;
   }
 
   .message-files {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin-top: 8px;
+    padding: 0;
+  }
+
+  .message-files.with-text {
+    padding: 0 8px 8px;
   }
 
   .file-chip {
@@ -253,6 +327,22 @@
   .file-chip:disabled {
     cursor: default;
     opacity: 0.85;
+  }
+
+  .image-preview-button {
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    line-height: 0;
+  }
+
+  .image-preview {
+    display: block;
+    border-radius: 14px;
+    object-fit: cover;
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.14);
+    background: rgba(15, 23, 42, 0.04);
   }
 
   .msg-time {

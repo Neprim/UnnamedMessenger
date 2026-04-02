@@ -29,7 +29,7 @@
     senderId: null,
     visible: false
   };
-  let editingMessage: { id: string; content: string } | null = null;
+  let editingMessage: { id: string; content: string; fileIds: string[] } | null = null;
   let editingText = '';
   let messagesContainer: HTMLDivElement | undefined;
   let scrollTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -38,6 +38,7 @@
   let pendingReadCheckForChatId: string | null = null;
   let shouldStickToBottom = true;
   let previousMessageCount = 0;
+  let previousInlinePreviewCount = 0;
   let lastTypingSentAt = 0;
   let lastObservedTypingValue = '';
   let pendingAttachments: PendingAttachment[] = [];
@@ -53,12 +54,14 @@
     }
   > = {};
   let fileAssetById: Record<string, CachedFileAsset> = {};
+  let imagePreviewById: Record<string, { objectUrl: string; width: number; height: number; alt: string }> = {};
   let chatFileMetadataByChatId: Record<
     string,
     Record<string, Awaited<ReturnType<typeof api.files.downloadChatFilesMetadata>>[number]>
   > = {};
   let metadataLoadedChatIds = new Set<string>();
   let fileMetadataGeneration = 0;
+  const imagePreviewResolutionInFlight = new Set<string>();
 
   const TYPING_THROTTLE_MS = 3000;
   const ERROR_TOAST_DURATION_MS = 4000;
@@ -124,12 +127,19 @@
     const nextAssets = { ...fileAssetById };
     delete nextAssets[fileId];
     fileAssetById = nextAssets;
+
+    const nextImagePreviews = { ...imagePreviewById };
+    delete nextImagePreviews[fileId];
+    imagePreviewById = nextImagePreviews;
+    imagePreviewResolutionInFlight.delete(fileId);
   }
 
   function resetFileCaches() {
     fileMetadataGeneration += 1;
     fileAssetById = {};
     fileDisplayById = {};
+    imagePreviewById = {};
+    imagePreviewResolutionInFlight.clear();
   }
 
   function handleContainerScroll() {
@@ -279,6 +289,19 @@
       });
     }
   }
+  $: if (messagesContainer) {
+    const currentInlinePreviewCount = Object.keys(imagePreviewById).length;
+    const shouldScrollToBottom = currentInlinePreviewCount > previousInlinePreviewCount && shouldStickToBottom;
+    previousInlinePreviewCount = currentInlinePreviewCount;
+
+    if (shouldScrollToBottom) {
+      tick().then(() => {
+        if (messagesContainer) {
+          messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+      });
+    }
+  }
   $: if (selectedChat?.id && newMessage !== lastObservedTypingValue) {
     lastObservedTypingValue = newMessage;
 
@@ -293,6 +316,9 @@
   $: if (selectedChat?.id && chatKey && visibleFileIds.length > 0) {
     loadVisibleFileMetadata(selectedChat.id, chatKey, visibleFileIds).catch(() => {});
   }
+  $: Object.entries(fileAssetById).forEach(([fileId, asset]) => {
+    ensureInlineImagePreview(fileId, asset);
+  });
   $: if (visibleFileIds.length === 0 && Object.keys(fileDisplayById).length > 0) {
     resetFileCaches();
   }
@@ -305,13 +331,13 @@
   }
 
   function handleEditFromMenu(message: Message) {
-    editingMessage = { id: message.id, content: message.content };
+    editingMessage = { id: message.id, content: message.content, fileIds: [...message.fileIds] };
     editingText = message.content;
     closeContextMenu();
   }
 
   async function handleEditMessage() {
-    if (!editingMessage || !editingText.trim()) return;
+    if (!editingMessage || (!editingText.trim() && editingMessage.fileIds.length === 0)) return;
 
     try {
       await chats.editMessage(params.id, editingMessage.id, editingText);
@@ -333,6 +359,61 @@
       errorTimeout = null;
     }
     error = '';
+  }
+
+  function computeInlineImagePreviewSize(width: number, height: number) {
+    const minDownscaledPreviewSize = 48;
+    const minUpscaledPreviewSize = 128;
+    const maxPreviewWidth = Math.max(180, Math.min(360, window.innerWidth - 160));
+    const maxPreviewHeight = Math.max(180, Math.min(360, window.innerHeight - 220));
+
+    const downscaleFactor = Math.min(maxPreviewWidth / width, maxPreviewHeight / height, 1);
+    const downscaledWidth = Math.round(width * downscaleFactor);
+    const downscaledHeight = Math.round(height * downscaleFactor);
+
+    if (downscaledWidth >= minDownscaledPreviewSize && downscaledHeight >= minDownscaledPreviewSize) {
+      return { width: downscaledWidth, height: downscaledHeight };
+    }
+
+    const upscaleFactor = Math.max(minUpscaledPreviewSize / width, minUpscaledPreviewSize / height);
+    const upscaledWidth = Math.round(width * upscaleFactor);
+    const upscaledHeight = Math.round(height * upscaleFactor);
+
+    if (upscaledWidth <= maxPreviewWidth && upscaledHeight <= maxPreviewHeight) {
+      return { width: upscaledWidth, height: upscaledHeight };
+    }
+
+    return null;
+  }
+
+  function ensureInlineImagePreview(fileId: string, asset: CachedFileAsset) {
+    if (!asset.type.startsWith('image/')) return;
+    if (imagePreviewById[fileId] || imagePreviewResolutionInFlight.has(fileId)) return;
+
+    imagePreviewResolutionInFlight.add(fileId);
+    const image = new Image();
+    image.onload = () => {
+      imagePreviewResolutionInFlight.delete(fileId);
+
+      const previewSize = computeInlineImagePreviewSize(image.naturalWidth, image.naturalHeight);
+      if (!previewSize) {
+        return;
+      }
+
+      imagePreviewById = {
+        ...imagePreviewById,
+        [fileId]: {
+          objectUrl: asset.objectUrl,
+          width: previewSize.width,
+          height: previewSize.height,
+          alt: asset.name
+        }
+      };
+    };
+    image.onerror = () => {
+      imagePreviewResolutionInFlight.delete(fileId);
+    };
+    image.src = asset.objectUrl;
   }
 
   $: if (error) {
@@ -841,6 +922,7 @@
       {showPlaceholder}
       {memberAvatarUrls}
       fileDisplayById={fileDisplayById}
+      imagePreviewById={imagePreviewById}
       unreadMarkerId={selectedChat?.unreadMarkerId}
       on:scroll={handleContainerScroll}
       on:fileclick={(event) => handleOpenFile(event.detail.fileId)}
@@ -881,7 +963,7 @@
             if (event.key === 'Escape') cancelEdit();
           }}
         />
-        <button class="edit-save" type="button" on:click={handleEditMessage} disabled={!editingText.trim()}>Сохранить</button>
+        <button class="edit-save" type="button" on:click={handleEditMessage} disabled={!editingText.trim() && editingMessage.fileIds.length === 0}>Сохранить</button>
         <button class="edit-cancel" type="button" on:click={cancelEdit}>Отмена</button>
       </div>
     {/if}
