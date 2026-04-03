@@ -10,6 +10,7 @@
   import Avatar from '../components/common/Avatar.svelte';
   import AvatarCropModal from '../components/settings/AvatarCropModal.svelte';
   import UserFilesModal from '../components/settings/UserFilesModal.svelte';
+  import ProjectInfoModal from '../components/common/ProjectInfoModal.svelte';
   import ChatView from './ChatView.svelte';
   import { cacheFile, getCachedFile } from '../lib/file-cache';
   import { formatFileSize, parseFileMetadataJson } from '../lib/chat-helpers';
@@ -24,6 +25,7 @@
   let showExportKeyModal = false;
   let showPasswordModal = false;
   let showDeleteAccountModal = false;
+  let showProjectInfoModal = false;
   let showAvatarModal = false;
   let showUserFilesModal = false;
   let exportConfirmChecked = false;
@@ -763,7 +765,10 @@
   <div class="modal-shell">
     <button class="modal-overlay" type="button" on:click={() => (showSettingsModal = false)} aria-label="Закрыть окно"></button>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-      <h3 id="settings-title">Настройки</h3>
+      <div class="settings-header">
+        <h3 id="settings-title">Настройки</h3>
+        <button class="settings-info-btn" type="button" on:click={() => (showProjectInfoModal = true)}>О проекте</button>
+      </div>
       <div class="profile-preview">
         <Avatar name={$auth.user?.username || 'U'} src={$auth.user?.avatarUrl} size={72} />
         <div class="profile-meta">
@@ -919,6 +924,10 @@
       </div>
     </div>
   </div>
+{/if}
+
+{#if showProjectInfoModal}
+  <ProjectInfoModal on:close={() => (showProjectInfoModal = false)} />
 {/if}
 
 {#if showUsernameModal}
@@ -1098,6 +1107,36 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+  }
+
+  .settings-header h3 {
+    margin: 0;
+  }
+
+  .settings-info-btn {
+    width: auto;
+    min-width: 0;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: #334155;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .settings-info-btn:hover {
+    background: #d8e1eb;
   }
 
   .profile-preview {

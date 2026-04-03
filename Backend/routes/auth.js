@@ -9,9 +9,35 @@ const { authenticate } = require('../middleware/auth');
 const { getAvatarUrl } = require('../utils/avatar');
 
 const router = express.Router();
+const MAX_ACCOUNTS_PER_IP = 3;
 
 function generateSalt() {
   return crypto.randomBytes(32).toString('base64');
+}
+
+function normalizeIp(ip) {
+  if (!ip || typeof ip !== 'string') {
+    return 'unknown';
+  }
+
+  if (ip.startsWith('::ffff:')) {
+    return ip.slice(7);
+  }
+
+  return ip;
+}
+
+function getClientIp(req) {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+    return normalizeIp(forwardedFor.split(',')[0].trim());
+  }
+
+  if (Array.isArray(forwardedFor) && forwardedFor.length > 0) {
+    return normalizeIp(forwardedFor[0]);
+  }
+
+  return normalizeIp(req.ip || req.socket?.remoteAddress || '');
 }
 
 router.post('/register', async (req, res) => {
@@ -19,19 +45,32 @@ router.post('/register', async (req, res) => {
     const { username, password, publicKey } = req.body;
     
     if (!username || !password || !publicKey) {
-      return res.status(400).json({ error: 'Missing required fields' });
+      return res.status(400).json({ error: 'Отсутствуют нужные поля' });
     }
     
     const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
     if (existingUser) {
-      return res.status(409).json({ error: 'Username already exists' });
+      return res.status(409).json({ error: 'Имя пользователя занято' });
+    }
+
+    const registrationIp = getClientIp(req);
+    const accountsFromIp = db
+      .prepare('SELECT COUNT(*) AS count FROM users WHERE registration_ip = ?')
+      .get(registrationIp)?.count ?? 0;
+
+    if (accountsFromIp >= MAX_ACCOUNTS_PER_IP) {
+      return res.status(429).json({
+        error: `Разрешено создавать не больше чем ${MAX_ACCOUNTS_PER_IP} аккаунта с одного IP`
+      });
     }
     
     const passwordHash = await bcrypt.hash(password, 10);
     const salt = generateSalt();
     const userId = uuidv4();
     
-    db.prepare('INSERT INTO users (id, username, password_hash, public_key, salt) VALUES (?, ?, ?, ?, ?)').run(userId, username, passwordHash, publicKey, salt);
+    db.prepare(
+      'INSERT INTO users (id, username, password_hash, public_key, salt, registration_ip) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(userId, username, passwordHash, publicKey, salt, registrationIp);
     
     const token = jwt.sign({ userId }, config.jwt.secret, { expiresIn: config.jwt.maxAge });
     

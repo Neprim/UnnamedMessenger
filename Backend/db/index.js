@@ -55,6 +55,7 @@ function ensureSchema() {
       password_hash TEXT NOT NULL,
       public_key TEXT NOT NULL,
       salt TEXT NOT NULL,
+      registration_ip TEXT,
       avatar_updated_at INTEGER,
       file_quota_bytes INTEGER NOT NULL DEFAULT 104857600,
       created_at INTEGER DEFAULT (strftime('%s', 'now'))
@@ -118,11 +119,19 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
     CREATE INDEX IF NOT EXISTS idx_chat_members_user ON chat_members(user_id);
+    CREATE INDEX IF NOT EXISTS idx_users_registration_ip ON users(registration_ip);
     CREATE INDEX IF NOT EXISTS idx_files_chat_created_at ON files(chat_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_files_uploaded_by ON files(uploaded_by);
     CREATE INDEX IF NOT EXISTS idx_chats_avatar_file_id ON chats(avatar_file_id);
     CREATE INDEX IF NOT EXISTS idx_message_files_file_id ON message_files(file_id);
   `);
+
+  if (!columnExists('users', 'registration_ip')) {
+    db.exec(`
+      ALTER TABLE users ADD COLUMN registration_ip TEXT;
+      CREATE INDEX IF NOT EXISTS idx_users_registration_ip ON users(registration_ip);
+    `);
+  }
 }
 
 ensureSchema();

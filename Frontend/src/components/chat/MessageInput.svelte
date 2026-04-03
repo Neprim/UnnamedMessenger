@@ -49,9 +49,7 @@
 
 <form class="input-area" class:drag-active={dragActive} on:submit|preventDefault={() => dispatch('submit')}>
   <input bind:this={fileInput} class="file-input" type="file" multiple on:change={handleFileChange} />
-  <button class="attach-btn" type="button" on:click={openFilePicker} disabled={attachmentsDisabled} title="Прикрепить файл">
-    +
-  </button>
+  <button class="attach-btn" type="button" on:click={openFilePicker} disabled={attachmentsDisabled} title="Прикрепить файл">+</button>
   <button class="library-btn" type="button" on:click={openLibrary} disabled={attachmentsDisabled} title="Выбрать из файлов чата">
     <span class="library-icon" aria-hidden="true">🖼</span>
     <span class="library-label">Из чата</span>
