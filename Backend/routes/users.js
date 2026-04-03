@@ -16,12 +16,6 @@ const { mapMessageRow } = require('../utils/message-files');
 
 const router = express.Router();
 
-const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
-const AVATAR_MIN_SIZE = 128;
-const AVATAR_MAX_SIZE = 2048;
-const AVATAR_MAX_RATIO = 4;
-const AVATAR_STORAGE_SIZE = 256;
-
 function createSystemMessage(chatId, eventType, data) {
   const messageId = uuidv4();
   const content = JSON.stringify({ event: eventType, ...data });
@@ -54,11 +48,14 @@ async function normalizeAvatar(buffer) {
     throw new Error('Avatar file is required');
   }
 
-  if (buffer.length > AVATAR_MAX_BYTES) {
+  if (buffer.length > config.limits.avatarMaxBytes) {
     throw new Error('Avatar exceeds 5 MB');
   }
 
-  const image = sharp(buffer, { animated: false, limitInputPixels: AVATAR_MAX_SIZE * AVATAR_MAX_SIZE });
+  const image = sharp(buffer, {
+    animated: false,
+    limitInputPixels: config.limits.avatarMaxSize * config.limits.avatarMaxSize
+  });
   const metadata = await image.metadata();
 
   if (!metadata.format || !['jpeg', 'png', 'webp'].includes(metadata.format)) {
@@ -69,21 +66,21 @@ async function normalizeAvatar(buffer) {
     throw new Error('Unable to determine image dimensions');
   }
 
-  if (metadata.width < AVATAR_MIN_SIZE || metadata.height < AVATAR_MIN_SIZE) {
-    throw new Error(`Avatar must be at least ${AVATAR_MIN_SIZE}x${AVATAR_MIN_SIZE}`);
+  if (metadata.width < config.limits.avatarMinSize || metadata.height < config.limits.avatarMinSize) {
+    throw new Error(`Avatar must be at least ${config.limits.avatarMinSize}x${config.limits.avatarMinSize}`);
   }
 
-  if (metadata.width > AVATAR_MAX_SIZE || metadata.height > AVATAR_MAX_SIZE) {
-    throw new Error(`Avatar must not exceed ${AVATAR_MAX_SIZE}x${AVATAR_MAX_SIZE}`);
+  if (metadata.width > config.limits.avatarMaxSize || metadata.height > config.limits.avatarMaxSize) {
+    throw new Error(`Avatar must not exceed ${config.limits.avatarMaxSize}x${config.limits.avatarMaxSize}`);
   }
 
   const ratio = metadata.width / metadata.height;
-  if (ratio > AVATAR_MAX_RATIO || ratio < 1 / AVATAR_MAX_RATIO) {
+  if (ratio > config.limits.avatarMaxRatio || ratio < 1 / config.limits.avatarMaxRatio) {
     throw new Error('Avatar aspect ratio is too extreme');
   }
 
   return sharp(buffer, { animated: false })
-    .resize(AVATAR_STORAGE_SIZE, AVATAR_STORAGE_SIZE, { fit: 'cover', position: 'centre' })
+    .resize(config.limits.avatarStorageSize, config.limits.avatarStorageSize, { fit: 'cover', position: 'centre' })
     .webp({ quality: 90 })
     .toBuffer();
 }
@@ -135,7 +132,7 @@ router.post(
   authenticate,
   express.raw({
     type: ['image/jpeg', 'image/png', 'image/webp'],
-    limit: `${AVATAR_MAX_BYTES}b`
+    limit: `${config.limits.avatarMaxBytes}b`
   }),
   async (req, res) => {
     try {

@@ -2,12 +2,10 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { authenticate } = require('../middleware/auth');
+const config = require('../config');
 
 const router = express.Router();
 
-const DEFAULT_QUOTA_BYTES = 100 * 1024 * 1024;
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
-const MAX_PLACEHOLDER_BYTES = 10 * 1024;
 const RAW_BODY_TYPES = ['application/octet-stream'];
 
 function mapFileRow(file) {
@@ -27,7 +25,7 @@ function getUserQuotaBytes(userId) {
     .prepare('SELECT file_quota_bytes FROM users WHERE id = ?')
     .get(userId);
 
-  return user?.file_quota_bytes ?? DEFAULT_QUOTA_BYTES;
+  return user?.file_quota_bytes ?? config.limits.defaultFileQuotaBytes;
 }
 
 function getUsedQuotaBytes(userId) {
@@ -134,7 +132,7 @@ router.put(
   authenticate,
   express.raw({
     type: RAW_BODY_TYPES,
-    limit: `${MAX_PLACEHOLDER_BYTES}b`
+    limit: `${config.limits.maxPlaceholderBytes}b`
   }),
   (req, res) => {
     try {
@@ -155,7 +153,7 @@ router.put(
       }
 
       const placeholderSize = content.length + metadata.length;
-      if (placeholderSize > MAX_PLACEHOLDER_BYTES) {
+      if (placeholderSize > config.limits.maxPlaceholderBytes) {
         return res.status(400).json({ error: 'Placeholder exceeds 10 KB' });
       }
 
@@ -245,7 +243,7 @@ router.post(
   authenticate,
   express.raw({
     type: RAW_BODY_TYPES,
-    limit: `${MAX_UPLOAD_BYTES}b`
+    limit: `${config.limits.maxUploadBytes}b`
   }),
   (req, res) => {
     try {

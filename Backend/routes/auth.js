@@ -9,7 +9,6 @@ const { authenticate } = require('../middleware/auth');
 const { getAvatarUrl } = require('../utils/avatar');
 
 const router = express.Router();
-const MAX_ACCOUNTS_PER_IP = 3;
 
 function generateSalt() {
   return crypto.randomBytes(32).toString('base64');
@@ -43,11 +42,11 @@ function getClientIp(req) {
 router.post('/register', async (req, res) => {
   try {
     const { username, password, publicKey } = req.body;
-    
+
     if (!username || !password || !publicKey) {
       return res.status(400).json({ error: 'Отсутствуют нужные поля' });
     }
-    
+
     const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
     if (existingUser) {
       return res.status(409).json({ error: 'Имя пользователя занято' });
@@ -58,30 +57,38 @@ router.post('/register', async (req, res) => {
       .prepare('SELECT COUNT(*) AS count FROM users WHERE registration_ip = ?')
       .get(registrationIp)?.count ?? 0;
 
-    if (accountsFromIp >= MAX_ACCOUNTS_PER_IP) {
+    if (accountsFromIp >= config.limits.maxAccountsPerIp) {
       return res.status(429).json({
-        error: `Разрешено создавать не больше чем ${MAX_ACCOUNTS_PER_IP} аккаунта с одного IP`
+        error: `Разрешено создавать не больше чем ${config.limits.maxAccountsPerIp} аккаунта с одного IP`
       });
     }
-    
+
     const passwordHash = await bcrypt.hash(password, 10);
     const salt = generateSalt();
     const userId = uuidv4();
-    
+
     db.prepare(
-      'INSERT INTO users (id, username, password_hash, public_key, salt, registration_ip) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(userId, username, passwordHash, publicKey, salt, registrationIp);
-    
+      'INSERT INTO users (id, username, password_hash, public_key, salt, registration_ip, file_quota_bytes) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      userId,
+      username,
+      passwordHash,
+      publicKey,
+      salt,
+      registrationIp,
+      config.limits.defaultFileQuotaBytes
+    );
+
     const token = jwt.sign({ userId }, config.jwt.secret, { expiresIn: config.jwt.maxAge });
-    
+
     res.cookie(config.cookie.name, token, {
       httpOnly: true,
       maxAge: config.cookie.maxAge,
       sameSite: 'strict'
     });
 
-    console.log(`Пользователь "${username}" зарегистрировался.`)
-    
+    console.log(`Пользователь "${username}" зарегистрировался.`);
+
     res.status(201).json({ id: userId, username, salt, token });
   } catch (err) {
     console.error('Register error:', err);
@@ -92,29 +99,31 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    
+
     if (!username || !password) {
       return res.status(400).json({ error: 'Missing credentials' });
     }
-    
-    const user = db.prepare('SELECT id, username, password_hash, salt, public_key, avatar_updated_at FROM users WHERE username = ?').get(username);
+
+    const user = db
+      .prepare('SELECT id, username, password_hash, salt, public_key, avatar_updated_at FROM users WHERE username = ?')
+      .get(username);
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
-    
+
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
-    
+
     const token = jwt.sign({ userId: user.id }, config.jwt.secret, { expiresIn: config.jwt.maxAge });
-    
+
     res.cookie(config.cookie.name, token, {
       httpOnly: true,
       maxAge: config.cookie.maxAge,
       sameSite: 'strict'
     });
-    
+
     res.json({
       id: user.id,
       username,
@@ -138,21 +147,21 @@ router.post('/logout', (req, res) => {
 router.post('/change-password', async (req, res) => {
   try {
     const { newPassword } = req.body;
-    
+
     if (!newPassword) {
       return res.status(400).json({ error: 'New password required' });
     }
-    
+
     const userId = req.userId;
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    
+
     const newSalt = generateSalt();
     const newPasswordHash = await bcrypt.hash(newPassword, 10);
-    
+
     db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(newPasswordHash, newSalt, userId);
-    
+
     res.json({ salt: newSalt });
   } catch (err) {
     console.error('Change password error:', err);

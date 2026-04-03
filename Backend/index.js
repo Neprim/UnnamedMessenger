@@ -6,18 +6,20 @@ const swaggerUi = require('swagger-ui-express');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const config = require('./config');
 process.loadEnvFile(".env")
 
 const app = express();
 
-const isProduction = process.env.NODE_ENV === 'production';
+const isProduction = config.app.isProduction;
+const corsOrigin = isProduction ? config.app.corsOrigin : config.app.devFrontendOrigin;
 
 app.use(cors({
-  origin: isProduction ? process.env.URL : 'http://localhost:5173',
+  origin: corsOrigin,
   credentials: true
 }));
 app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: config.app.bodyParserLimit }));
 app.use(cookieParser());
 
 const openApiSpec = JSON.parse(fs.readFileSync(path.join(__dirname, 'openapi.json'), 'utf8'));
@@ -51,12 +53,11 @@ app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', isProduction ? '*' : 'http://localhost:5173');
+  res.setHeader('Access-Control-Allow-Origin', corsOrigin || '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
 
   try {
     const jwt = require('jsonwebtoken');
-    const config = require('./config');
     const decoded = jwt.verify(token, config.jwt.secret);
     const userId = decoded.userId;
 
@@ -84,12 +85,12 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-const httpsOptions = {                                               
-  key: fs.readFileSync(path.join(__dirname, 'ssl/server.key')),      
-  cert: fs.readFileSync(path.join(__dirname, 'ssl/server.crt'))      
-}; 
+const httpsOptions = {
+  key: fs.readFileSync(path.resolve(__dirname, config.ssl.keyPath)),
+  cert: fs.readFileSync(path.resolve(__dirname, config.ssl.certPath))
+};
 
-const PORT = process.env.PORT || 3000;
+const PORT = config.app.port;
 if (isProduction) {
   https.createServer(httpsOptions, app).listen(PORT, () => {           
     console.log(`Server running on port ${PORT} (HTTPS)`);             

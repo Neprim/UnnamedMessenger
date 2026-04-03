@@ -1,7 +1,7 @@
 {
   "name": "unnamedmessenger",
   "version": "1.0.0",
-  "description": "Самописная общалка с повышенной защитой",
+  "description": "Защищённый мессенджер с end-to-end шифрованием",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
