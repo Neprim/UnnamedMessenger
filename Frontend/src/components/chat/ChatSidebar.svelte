@@ -78,10 +78,12 @@
 <style>
   .sidebar {
     width: 320px;
+    min-width: 320px;
     border-right: 1px solid #e0e0e0;
     display: flex;
     flex-direction: column;
     background: #f8f9fa;
+    min-height: 0;
   }
 
   header {
@@ -132,6 +134,7 @@
     flex: 1;
     overflow-y: auto;
     padding: 8px;
+    min-height: 0;
   }
 
   .chat-item {
@@ -211,5 +214,39 @@
     padding: 40px 20px;
     text-align: center;
     color: #888;
+  }
+
+  @media (max-width: 768px) {
+    .sidebar {
+      width: 100%;
+      min-width: 0;
+      border-right: none;
+    }
+
+    header {
+      padding: 14px 16px;
+    }
+
+    h2 {
+      font-size: 18px;
+    }
+
+    .chat-list {
+      padding: 6px;
+    }
+
+    .chat-item {
+      padding: 10px 12px;
+      gap: 10px;
+    }
+
+    .chat-name {
+      font-size: 14px;
+    }
+
+    .chat-meta {
+      max-width: none;
+      font-size: 12px;
+    }
   }
 </style>

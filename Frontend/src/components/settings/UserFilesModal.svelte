@@ -329,10 +329,12 @@
     display: flex;
     gap: 10px;
     align-items: stretch;
+    min-width: 0;
   }
 
   .file-main {
     flex: 1;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -424,6 +426,7 @@
   }
 
   .ghost-btn {
+    flex: 0 0 auto;
     min-width: 92px;
     padding: 0 14px;
     background: #f8fafc;
@@ -460,5 +463,23 @@
     text-align: center;
     color: #64748b;
     font-size: 14px;
+  }
+
+  @media (max-width: 768px) {
+    .file-row {
+      flex-wrap: wrap;
+    }
+
+    .ghost-btn {
+      min-height: 42px;
+      padding: 10px 14px;
+    }
+
+    .file-meta strong,
+    .file-meta span {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
   }
 </style>

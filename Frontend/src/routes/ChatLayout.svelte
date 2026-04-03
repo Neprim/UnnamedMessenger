@@ -712,13 +712,20 @@
   });
 </script>
 
-<div class="layout">
+<div class="layout" class:chat-open={Boolean(selectedChatId)}>
   <input id="avatarInput" class="hidden-input" type="file" accept="image/jpeg,image/png,image/webp" on:change={handleAvatarFileChange} />
-  <ChatSidebar chats={$chats} {loading} {selectedChatId} on:create={() => (showCreateModal = true)} on:settings={() => (showSettingsModal = true)} />
+  <div class="sidebar-wrap">
+    <ChatSidebar chats={$chats} {loading} {selectedChatId} on:create={() => (showCreateModal = true)} on:settings={() => (showSettingsModal = true)} />
+  </div>
 
   <main class="main">
     {#if selectedChatId}
-      <ChatView params={{ id: selectedChatId }} chatDetail={selectedChatDetail} />
+      <ChatView
+        params={{ id: selectedChatId }}
+        chatDetail={selectedChatDetail}
+        showBackButton={true}
+        on:back={() => push('/chats')}
+      />
     {:else}
       <div class="no-chat">
         <p>Выберите чат, чтобы начать общение</p>
@@ -1005,7 +1012,13 @@
   .layout {
     display: flex;
     height: 100vh;
+    height: 100dvh;
     background: #fff;
+  }
+
+  .sidebar-wrap {
+    display: flex;
+    min-height: 0;
   }
 
   .main {
@@ -1013,6 +1026,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
     background: #fff;
   }
 
@@ -1321,5 +1335,66 @@
 
   .hidden-input {
     display: none;
+  }
+
+  @media (max-width: 768px) {
+    .layout {
+      display: block;
+      position: relative;
+    }
+
+    .sidebar-wrap,
+    .main {
+      width: 100%;
+      height: 100%;
+    }
+
+    .layout.chat-open .sidebar-wrap {
+      display: none;
+    }
+
+    .layout:not(.chat-open) .main {
+      display: none;
+    }
+
+    .no-chat {
+      padding: 24px;
+      text-align: center;
+    }
+
+    .modal-shell {
+      padding: 16px;
+      align-items: flex-end;
+    }
+
+    .modal {
+      width: min(100%, 420px);
+      max-height: calc(100dvh - 32px);
+      overflow-y: auto;
+      padding: 20px;
+      border-radius: 18px;
+    }
+
+    .modal-actions {
+      flex-wrap: wrap;
+    }
+
+    .modal-actions button {
+      flex: 1 1 140px;
+      min-height: 44px;
+    }
+
+    .settings-header {
+      align-items: flex-start;
+    }
+
+    .profile-preview {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .profile-meta {
+      width: 100%;
+    }
   }
 </style>

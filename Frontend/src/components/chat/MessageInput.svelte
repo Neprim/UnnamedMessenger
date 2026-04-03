@@ -249,4 +249,58 @@
     font-size: 14px;
     line-height: 1;
   }
+
+  @media (max-width: 768px) {
+    .input-area {
+      gap: 8px;
+      padding: 12px;
+    }
+
+    .attach-btn,
+    .library-btn {
+      width: 40px;
+      height: 40px;
+      min-width: 40px;
+      border-radius: 20px;
+    }
+
+    .library-btn {
+      padding: 0;
+      gap: 0;
+    }
+
+    .library-label {
+      display: none;
+    }
+
+    .library-icon {
+      font-size: 17px;
+    }
+
+    input {
+      min-width: 0;
+      padding: 12px 16px;
+      font-size: 14px;
+    }
+
+    button[type='submit'] {
+      padding: 12px 18px;
+      min-height: 40px;
+      font-size: 14px;
+    }
+
+    .attachments {
+      gap: 6px;
+      padding: 0 12px 12px;
+    }
+
+    .attachment-chip {
+      max-width: 100%;
+      padding: 7px 10px;
+    }
+
+    .attachment-name {
+      max-width: 180px;
+    }
+  }
 </style>

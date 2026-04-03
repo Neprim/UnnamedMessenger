@@ -256,4 +256,26 @@
     color: #666;
     font-size: 14px;
   }
+
+  @media (max-width: 768px) {
+    .container {
+      max-width: none;
+      margin: 0;
+      min-height: 100vh;
+      min-height: 100dvh;
+      border-radius: 0;
+      box-shadow: none;
+      padding: 72px 18px 24px;
+    }
+
+    .info-btn {
+      top: 14px;
+      right: 14px;
+    }
+
+    h1 {
+      margin-bottom: 24px;
+      font-size: 28px;
+    }
+  }
 </style>

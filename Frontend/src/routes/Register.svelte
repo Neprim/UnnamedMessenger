@@ -295,4 +295,52 @@
     background: #4caf50;
     color: white;
   }
+
+  @media (max-width: 768px) {
+    .container {
+      max-width: none;
+      margin: 0;
+      min-height: 100vh;
+      min-height: 100dvh;
+      border-radius: 0;
+      box-shadow: none;
+      padding: 72px 18px 24px;
+    }
+
+    .info-btn {
+      top: 14px;
+      right: 14px;
+    }
+
+    h1 {
+      margin-bottom: 24px;
+      font-size: 28px;
+    }
+
+    .modal-shell {
+      padding: 16px;
+      align-items: flex-end;
+    }
+
+    .modal {
+      width: min(100%, 520px);
+      max-height: calc(100dvh - 32px);
+      overflow-y: auto;
+      padding: 20px;
+      border-radius: 18px;
+    }
+
+    .modal h3 {
+      font-size: 22px;
+    }
+
+    .modal-actions {
+      flex-wrap: wrap;
+    }
+
+    .modal-actions button {
+      flex: 1 1 160px;
+      min-height: 44px;
+    }
+  }
 </style>

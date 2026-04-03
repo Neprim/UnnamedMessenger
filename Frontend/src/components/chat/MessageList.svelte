@@ -208,6 +208,7 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+    min-width: 0;
   }
 
   .load-more-placeholder {
@@ -288,6 +289,7 @@
     gap: 8px;
     align-self: flex-start;
     max-width: 55%;
+    min-width: 0;
   }
 
   .message-row.own {
@@ -430,5 +432,55 @@
     font-style: italic;
     color: #666;
     margin-left: 2px;
+  }
+
+  @media (max-width: 768px) {
+    .messages {
+      padding: 12px;
+      gap: 12px;
+    }
+
+    .message-header {
+      margin-bottom: 2px;
+      padding: 0 2px;
+    }
+
+    .sender-name {
+      font-size: 13px;
+    }
+
+    .message-row {
+      max-width: 88%;
+    }
+
+    .message-text-area {
+      padding: 9px 12px;
+    }
+
+    .message-content {
+      font-size: 14px;
+    }
+
+    .message-files.with-text {
+      padding: 0 6px 6px;
+    }
+
+    .image-preview,
+    .image-preview-fallback-wrap {
+      max-width: min(100%, 280px);
+    }
+
+    .video-preview {
+      width: min(280px, calc(100vw - 88px));
+      max-height: 240px;
+    }
+
+    .audio-preview {
+      width: min(280px, calc(100vw - 88px));
+    }
+
+    .msg-time {
+      font-size: 9px;
+    }
   }
 </style>

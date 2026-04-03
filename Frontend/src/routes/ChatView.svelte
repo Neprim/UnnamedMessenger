@@ -1,5 +1,5 @@
 ﻿<script lang="ts">
-  import { onDestroy, tick } from 'svelte';
+  import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
   import { deletedFilesEvent } from '../lib/sse';
@@ -18,6 +18,11 @@
 
   export let params: { id: string };
   export let chatDetail: Chat | null = null;
+  export let showBackButton = false;
+
+  const dispatch = createEventDispatcher<{
+    back: void;
+  }>();
 
   let error = '';
   let newMessage = '';
@@ -1683,16 +1688,28 @@
   on:dragleave={handleDragLeave}
   on:drop={handleDrop}
 >
-  <button
-    class="chat-header-btn"
-    type="button"
-    on:click={openChatDetails}
-    aria-label="Открыть информацию о чате"
-  >
-    <div class="chat-header-text">
-      <h2>{chatDisplayName}</h2>
-    </div>
-  </button>
+  <div class="chat-header">
+    {#if showBackButton}
+      <button
+        class="chat-back-btn"
+        type="button"
+        on:click={() => dispatch('back')}
+        aria-label="Назад к чатам"
+      >
+        ←
+      </button>
+    {/if}
+    <button
+      class="chat-header-btn"
+      type="button"
+      on:click={openChatDetails}
+      aria-label="Открыть информацию о чате"
+    >
+      <div class="chat-header-text">
+        <h2>{chatDisplayName}</h2>
+      </div>
+    </button>
+  </div>
 
   {#if !selectedChat?.isHydrated && !messages.length}
     <div class="loading">Загрузка...</div>
@@ -2048,6 +2065,8 @@
     flex-direction: column;
     height: 100%;
     position: relative;
+    min-width: 0;
+    min-height: 0;
   }
 
   .drop-overlay {
@@ -2084,18 +2103,40 @@
     color: #64748b;
   }
 
-  .chat-header-btn {
-    padding: 16px 24px;
+  .chat-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 24px;
     border-bottom: 1px solid #e0e0e0;
+    background: white;
+  }
+
+  .chat-back-btn {
+    display: none;
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: #eef2f7;
+    color: #0f172a;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .chat-header-btn {
+    padding: 16px 0;
     display: flex;
     align-items: center;
     width: 100%;
     background: white;
-    border-top: none;
-    border-left: none;
-    border-right: none;
+    border: none;
     cursor: pointer;
     text-align: left;
+    min-width: 0;
   }
 
   .chat-header-btn:hover {
@@ -2361,6 +2402,85 @@
 
   .hidden-input {
     display: none;
+  }
+
+  @media (max-width: 768px) {
+    .chat-header {
+      gap: 10px;
+      padding: 0 12px;
+    }
+
+    .chat-back-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .chat-header-btn {
+      padding: 13px 0;
+    }
+
+    h2 {
+      font-size: 16px;
+    }
+
+    .drop-overlay {
+      padding: 0 14px 92px;
+    }
+
+    .drop-overlay-card {
+      width: 100%;
+      max-width: 360px;
+      padding: 18px 20px;
+    }
+
+    .error-toast {
+      top: 66px;
+      right: 12px;
+      left: 12px;
+      max-width: none;
+    }
+
+    .typing-indicator {
+      padding: 8px 12px 0;
+    }
+
+    .edit-area {
+      flex-wrap: wrap;
+      padding: 10px 12px;
+    }
+
+    .edit-area input {
+      min-width: 0;
+    }
+
+    .edit-save,
+    .edit-cancel {
+      flex: 1 1 120px;
+    }
+
+    .modal-shell {
+      padding: 16px;
+      align-items: flex-end;
+    }
+
+    .modal {
+      width: min(100%, 420px);
+      max-height: calc(100dvh - 32px);
+      overflow-y: auto;
+      padding: 20px;
+      border-radius: 18px;
+    }
+
+    .modal-actions {
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .modal-actions button {
+      flex: 1 1 140px;
+      min-height: 44px;
+    }
   }
 </style>
 
