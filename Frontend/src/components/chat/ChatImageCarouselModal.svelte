@@ -58,13 +58,13 @@
 
       <div class="viewer">
         {#if items.length > 1}
-          <button class="nav-btn" type="button" on:click={showPrevious} aria-label="Предыдущее изображение">‹</button>
+          <button class="nav-btn prev-btn" type="button" on:click={showPrevious} aria-label="Предыдущее изображение">‹</button>
         {/if}
         <div class="image-wrap">
           <img src={activeItem.src} alt={activeItem.name} />
         </div>
         {#if items.length > 1}
-          <button class="nav-btn" type="button" on:click={showNext} aria-label="Следующее изображение">›</button>
+          <button class="nav-btn next-btn" type="button" on:click={showNext} aria-label="Следующее изображение">›</button>
         {/if}
       </div>
 
@@ -110,6 +110,7 @@
     z-index: 1;
     width: min(1100px, calc(100vw - 32px));
     max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
     display: flex;
     flex-direction: column;
     gap: 18px;
@@ -163,6 +164,7 @@
     background: rgba(255, 255, 255, 0.12);
     color: white;
     font-weight: 600;
+    flex: none;
   }
 
   .viewer {
@@ -189,12 +191,14 @@
     justify-content: center;
     min-height: 0;
     max-height: calc(100vh - 220px);
+    max-height: calc(100dvh - 220px);
     overflow: hidden;
   }
 
   .image-wrap img {
     max-width: 100%;
     max-height: calc(100vh - 220px);
+    max-height: calc(100dvh - 220px);
     object-fit: contain;
     border-radius: 18px;
   }
@@ -228,13 +232,33 @@
     object-fit: cover;
   }
 
-  @media (max-width: 720px) {
+  @media (max-width: 768px) {
+    .modal-shell {
+      align-items: stretch;
+    }
+
     .modal {
-      padding: 16px;
+      width: 100%;
+      height: 100%;
+      max-height: 100dvh;
+      border-radius: 0;
+      padding: 14px;
+      gap: 14px;
+    }
+
+    .modal-header {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .close-btn {
+      align-self: stretch;
+      min-height: 44px;
     }
 
     .viewer {
       grid-template-columns: 1fr;
+      position: relative;
     }
 
     .nav-btn {
@@ -243,7 +267,13 @@
 
     .image-wrap,
     .image-wrap img {
-      max-height: calc(100vh - 200px);
+      max-height: calc(100dvh - 210px);
+      border-radius: 14px;
+    }
+
+    .thumb {
+      width: 64px;
+      height: 64px;
     }
   }
 </style>

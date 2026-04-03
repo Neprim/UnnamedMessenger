@@ -115,6 +115,7 @@
     color: #334155;
     cursor: pointer;
     font-weight: 600;
+    flex: none;
   }
 
   .image-grid {
@@ -137,6 +138,7 @@
     padding: 8px;
     border-radius: 16px;
     text-align: left;
+    min-width: 0;
   }
 
   .image-card img,
@@ -178,6 +180,7 @@
     padding: 12px 14px;
     border-radius: 14px;
     text-align: left;
+    min-width: 0;
   }
 
   .file-icon {
@@ -223,5 +226,52 @@
     text-align: center;
     color: #64748b;
     font-size: 14px;
+  }
+
+  @media (max-width: 768px) {
+    .modal-shell {
+      align-items: flex-end;
+      padding: 16px;
+    }
+
+    .modal {
+      width: min(100%, 560px);
+      max-height: calc(100dvh - 32px);
+      padding: 18px;
+      border-radius: 18px;
+    }
+
+    .modal-header {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .close-btn {
+      align-self: stretch;
+      min-height: 44px;
+    }
+
+    .image-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .file-row {
+      padding: 10px 12px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .image-grid {
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .file-meta strong,
+    .file-meta span,
+    .file-name {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
   }
 </style>

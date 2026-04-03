@@ -205,6 +205,7 @@
     position: relative;
     display: inline-flex;
     border-radius: 50%;
+    flex: none;
   }
 
   .chat-avatar-trigger.editable,
@@ -214,6 +215,7 @@
 
   .chat-summary-text {
     min-width: 0;
+    flex: 1;
   }
 
   .chat-name-trigger {
@@ -371,6 +373,7 @@
     align-items: center;
     gap: 10px;
     min-width: 0;
+    flex: 1;
   }
 
   .member-meta {
@@ -402,6 +405,7 @@
     cursor: pointer;
     font-size: 13px;
     font-weight: 600;
+    flex: none;
   }
 
   .remove-btn:hover {
@@ -458,14 +462,38 @@
     background: #1e293b;
   }
 
-  @media (max-width: 640px) {
+  @media (max-width: 768px) {
+    .modal-shell {
+      align-items: flex-end;
+      padding: 16px;
+    }
+
     .modal {
+      width: min(100%, 560px);
+      max-height: calc(100dvh - 32px);
       padding: 20px;
       border-radius: 18px;
     }
 
     .chat-summary {
       align-items: flex-start;
+    }
+
+    .chat-title-text {
+      font-size: 21px;
+    }
+
+    .media-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .media-tile {
+      min-height: 96px;
+      padding: 14px;
+    }
+
+    .media-tile span {
+      font-size: 24px;
     }
 
     .member-item {
@@ -475,6 +503,33 @@
 
     .remove-btn {
       width: 100%;
+      min-height: 42px;
+    }
+
+    .action-list > button,
+    .modal-actions > button {
+      width: 100%;
+      min-height: 44px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .chat-summary {
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .chat-avatar-trigger {
+      align-self: flex-start;
+    }
+
+    .media-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .section-header {
+      align-items: flex-start;
+      flex-direction: column;
     }
   }
 </style>
