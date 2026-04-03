@@ -6,7 +6,12 @@ const swaggerUi = require('swagger-ui-express');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-process.loadEnvFile(".env")
+
+const envPath = path.join(__dirname, '.env');
+if (typeof process.loadEnvFile === 'function' && fs.existsSync(envPath)) {
+  process.loadEnvFile(envPath);
+}
+
 const config = require('./config');
 
 const app = express();
