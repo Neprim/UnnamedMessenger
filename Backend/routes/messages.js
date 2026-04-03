@@ -6,6 +6,8 @@ const sse = require('../sse');
 const {
   validateAttachableFileIds,
   setMessageFileIds,
+  getMessageFileIdsMap,
+  getReplyPreviewByMessageId,
   mapMessageRow
 } = require('../utils/message-files');
 
@@ -29,7 +31,7 @@ function getMessageFileIds(messageId) {
 
 router.put('/:messageId', authenticate, (req, res) => {
   try {
-    const { content } = req.body;
+    const { content, replyToMessageId } = req.body;
     
     const message = db.prepare('SELECT chat_id, sender_id FROM messages WHERE id = ?').get(req.params.messageId);
     if (!message) {
@@ -61,18 +63,34 @@ router.put('/:messageId', authenticate, (req, res) => {
     if (content && content.length > config.limits.maxMessageLength) {
       return res.status(400).json({ error: `Message exceeds ${config.limits.maxMessageLength} characters` });
     }
+
+    if (replyToMessageId !== undefined && replyToMessageId !== null) {
+      if (typeof replyToMessageId !== 'string' || !replyToMessageId.trim()) {
+        return res.status(400).json({ error: 'replyToMessageId must be a non-empty string or null' });
+      }
+
+      const replyTarget = db.prepare('SELECT id FROM messages WHERE id = ? AND chat_id = ?').get(replyToMessageId, message.chat_id);
+      if (!replyTarget) {
+        return res.status(400).json({ error: 'Reply target message not found in this chat' });
+      }
+    }
     
     const editedAt = Math.floor(Date.now() / 1000);
-    db.prepare('UPDATE messages SET content = ?, edited_at = ? WHERE id = ?').run(
+    db.prepare('UPDATE messages SET content = ?, reply_to_message_id = ?, edited_at = ? WHERE id = ?').run(
       content || null,
+      replyToMessageId || null,
       editedAt,
       req.params.messageId
     );
     setMessageFileIds(req.params.messageId, fileIds);
 
-    const updated = db.prepare('SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE id = ?').get(req.params.messageId);
+    const updated = db.prepare('SELECT id, chat_id, sender_id, content, reply_to_message_id, timestamp, edited_at FROM messages WHERE id = ?').get(req.params.messageId);
 
-    const response = mapMessageRow(updated);
+    const response = mapMessageRow(
+      updated,
+      getMessageFileIdsMap([updated.id]),
+      getReplyPreviewByMessageId([updated])
+    );
     
     broadcastToChatMembers(message.chat_id, 'message_edited', response, req.userId);
     
@@ -104,9 +122,11 @@ router.delete('/:messageId', authenticate, (req, res) => {
     const countFileLinks = db.prepare('SELECT COUNT(*) as count FROM message_files WHERE file_id = ?');
     const avatarUsage = db.prepare('SELECT 1 FROM chats WHERE avatar_file_id = ? LIMIT 1');
     const deleteFile = db.prepare('DELETE FROM files WHERE id = ?');
+    const deletePins = db.prepare('DELETE FROM pinned_messages WHERE message_id = ?');
     const deletedFileIds = [];
 
     db.transaction(() => {
+      deletePins.run(req.params.messageId);
       deleteMessage.run(req.params.messageId);
 
       for (const fileId of fileIds) {
@@ -125,14 +145,44 @@ router.delete('/:messageId', authenticate, (req, res) => {
       }
     })();
     
+    const pinnedMessages = db.prepare(`
+      SELECT pm.chat_id, pm.message_id, pm.pinned_by, pm.created_at,
+        u.username AS pinned_by_username,
+        m.id, m.chat_id, m.sender_id, m.content, m.reply_to_message_id, m.timestamp, m.edited_at
+      FROM pinned_messages pm
+      JOIN messages m ON m.id = pm.message_id
+      LEFT JOIN users u ON u.id = pm.pinned_by
+      WHERE pm.chat_id = ?
+      ORDER BY pm.created_at ASC
+    `).all(message.chat_id);
+    const pinnedFileIdsByMessage = getMessageFileIdsMap(pinnedMessages.map((row) => row.id));
+    const pinnedReplyPreviewByMessageId = getReplyPreviewByMessageId(pinnedMessages);
+
     broadcastToChatMembers(
       message.chat_id,
       'message_deleted',
-      { messageId: req.params.messageId, chatId: message.chat_id, deletedFileIds },
+      {
+        messageId: req.params.messageId,
+        chatId: message.chat_id,
+        deletedFileIds,
+        pinnedMessages: pinnedMessages.map((row) => ({
+          chatId: row.chat_id,
+          pinnedBy: row.pinned_by,
+          pinnedByUsername: row.pinned_by_username ?? 'Unknown',
+          pinnedAt: row.created_at,
+          message: mapMessageRow(row, pinnedFileIdsByMessage, pinnedReplyPreviewByMessageId)
+        }))
+      },
       req.userId
     );
     
-    res.json({ message: 'Message deleted', deletedFileIds });
+    res.json({ message: 'Message deleted', deletedFileIds, pinnedMessages: pinnedMessages.map((row) => ({
+      chatId: row.chat_id,
+      pinnedBy: row.pinned_by,
+      pinnedByUsername: row.pinned_by_username ?? 'Unknown',
+      pinnedAt: row.created_at,
+      message: mapMessageRow(row, pinnedFileIdsByMessage, pinnedReplyPreviewByMessageId)
+    })) });
   } catch (err) {
     console.error('Delete message error:', err);
     res.status(500).json({ error: 'Internal server error' });

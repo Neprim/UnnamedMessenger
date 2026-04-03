@@ -1,8 +1,8 @@
 import { writable } from 'svelte/store';
-import type { Message } from './types';
+import type { Message, PinnedMessage } from './types';
 
 export interface SSEEvent {
-  type: 'new_message' | 'message_deleted' | 'message_edited' | 'member_added' | 'member_removed' | 'member_left' | 'chat_deleted' | 'typing' | 'chat_updated';
+  type: 'new_message' | 'message_deleted' | 'message_edited' | 'member_added' | 'member_removed' | 'member_left' | 'chat_deleted' | 'typing' | 'chat_updated' | 'pins_updated';
   data: any;
 }
 
@@ -16,6 +16,7 @@ export const memberEvent = writable<{ type: string; chatId: string; userId: stri
 export const chatDeletedEvent = writable<string | null>(null);
 export const chatUpdatedEvent = writable<string | null>(null);
 export const typingEvent = writable<{ chatId: string; userId: string } | null>(null);
+export const pinsUpdatedEvent = writable<{ chatId: string; pinnedMessages: PinnedMessage[] } | null>(null);
 
 let eventSource: EventSource | null = null;
 
@@ -75,6 +76,12 @@ function handleSSEEvent(event: SSEEvent) {
       if (deletedFileIds.length > 0) {
         deletedFilesEvent.set({ chatId: event.data.chatId, fileIds: deletedFileIds });
       }
+      if (Array.isArray(event.data.pinnedMessages)) {
+        pinsUpdatedEvent.set({
+          chatId: event.data.chatId,
+          pinnedMessages: event.data.pinnedMessages
+        });
+      }
       break;
     }
     case 'message_edited': {
@@ -111,6 +118,13 @@ function handleSSEEvent(event: SSEEvent) {
       typingEvent.set({
         chatId: data.chatId,
         userId: data.userId
+      });
+      break;
+    }
+    case 'pins_updated': {
+      pinsUpdatedEvent.set({
+        chatId: event.data.chatId,
+        pinnedMessages: event.data.pinnedMessages ?? []
       });
       break;
     }

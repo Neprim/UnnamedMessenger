@@ -22,6 +22,16 @@ export interface LastMessage {
   senderUsername?: string;
   isSystem: boolean;
   hasAttachments?: boolean;
+  attachmentNames?: string[];
+}
+
+export interface ReplyPreview {
+  id: string;
+  senderId: string | null;
+  senderUsername: string;
+  content: string;
+  fileIds: string[];
+  isDeleted: boolean;
 }
 
 export interface Message {
@@ -29,6 +39,8 @@ export interface Message {
   chatId?: string;
   senderId: string | null;
   content: string;
+  replyToMessageId?: string | null;
+  reply?: ReplyPreview | null;
   fileIds: string[];
   deletedFileIds?: string[];
   timestamp: number;
@@ -86,6 +98,15 @@ export interface Chat {
     userId: string;
     expiresAt: number;
   }>;
+  pinnedMessages?: PinnedMessage[];
+}
+
+export interface PinnedMessage {
+  chatId: string;
+  pinnedBy: string;
+  pinnedByUsername: string;
+  pinnedAt: number;
+  message: Message;
 }
 
 export interface SearchUserResult {

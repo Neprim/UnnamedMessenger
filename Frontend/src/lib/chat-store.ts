@@ -8,12 +8,14 @@ import {
   decryptChatName,
   decryptMessageForDisplay,
   decryptMessagesForDisplay,
+  formatAttachmentNamesPreview,
+  getMemberMap,
   getOtherUser,
   isSystemMessage,
   parseFileMetadataJson,
   parseSystemMessage
 } from './chat-helpers';
-import type { Chat, ChatMessagesResponse, CreateChatRequest, MemberEventPayload, Message } from './types';
+import type { Chat, ChatMessagesResponse, CreateChatRequest, MemberEventPayload, Message, PinnedMessage } from './types';
 
 const INITIAL_CHAT_MESSAGES_LIMIT = 20;
 const SIDEBAR_PREVIEW_MESSAGES_LIMIT = 10;
@@ -82,6 +84,77 @@ function createChatsStore() {
     update((chatList) => chatList.filter((chat) => chat.id !== chatId));
   };
 
+  const setPinnedMessages = (chatId: string, pinnedMessages: PinnedMessage[]) => {
+    updateChatById(chatId, { pinnedMessages });
+  };
+
+  const buildReplyPreviewFromMessage = (message: Message) => ({
+    id: message.id,
+    senderId: message.senderId,
+    senderUsername: message.senderUsername ?? 'Unknown',
+    content: message.content,
+    fileIds: message.fileIds,
+    isDeleted: false
+  });
+
+  const syncDerivedMessageState = (
+    messages: Message[],
+    pinnedMessages: PinnedMessage[],
+    sourceMessageId: string,
+    sourceMessage: Message | null
+  ) => {
+    const updateReply = (message: Message): Message => {
+      if (message.replyToMessageId !== sourceMessageId) {
+        return message;
+      }
+
+      return {
+        ...message,
+        reply: sourceMessage
+          ? buildReplyPreviewFromMessage(sourceMessage)
+          : {
+              id: sourceMessageId,
+              senderId: message.reply?.senderId ?? null,
+              senderUsername: message.reply?.senderUsername ?? 'Удалённое сообщение',
+              content: '',
+              fileIds: [],
+              isDeleted: true
+            }
+      };
+    };
+
+    const nextMessages = messages
+      .map((message) => {
+        if (sourceMessage && message.id === sourceMessageId) {
+          return { ...message, ...sourceMessage };
+        }
+
+        return updateReply(message);
+      })
+      .filter((message) => message.id !== sourceMessageId || Boolean(sourceMessage));
+
+    const nextPinnedMessages = pinnedMessages
+      .map((entry) => {
+        if (sourceMessage && entry.message.id === sourceMessageId) {
+          return {
+            ...entry,
+            message: { ...entry.message, ...sourceMessage }
+          };
+        }
+
+        return {
+          ...entry,
+          message: updateReply(entry.message)
+        };
+      })
+      .filter((entry) => entry.message.id !== sourceMessageId || Boolean(sourceMessage));
+
+    return {
+      messages: nextMessages,
+      pinnedMessages: nextPinnedMessages
+    };
+  };
+
   const replaceMessages = (chatId: string, messages: Message[]) => {
     updateChatById(chatId, {
       messages,
@@ -117,6 +190,58 @@ function createChatsStore() {
     }
 
     return authState;
+  };
+
+  const resolveAttachmentNames = async (
+    chatId: string,
+    fileIds: string[],
+    chatKey: CryptoKey | null
+  ): Promise<string[]> => {
+    if (!chatKey || fileIds.length === 0) {
+      return [];
+    }
+
+    const metadataResults = await Promise.allSettled(
+      fileIds.map(async (fileId) => {
+        const metadataResponse = await api.files.downloadChatFileMetadata(chatId, fileId);
+        const decryptedMetadataBytes = await crypto.decryptBinary(chatKey, crypto.base64ToBytes(metadataResponse.metadataBase64));
+        const metadataText = new TextDecoder().decode(decryptedMetadataBytes);
+        const metadata = parseFileMetadataJson(metadataText);
+        return metadata?.name?.trim() || null;
+      })
+    );
+
+    return metadataResults
+      .map((result) => (result.status === 'fulfilled' ? result.value : null))
+      .filter((name): name is string => Boolean(name));
+  };
+
+  const enrichLastMessageAttachments = async (
+    chatId: string,
+    lastMessage: ReturnType<typeof buildLastMessage>,
+    sourceMessage: Message | undefined,
+    chatKey: CryptoKey | null
+  ) => {
+    if (
+      !lastMessage ||
+      lastMessage.isSystem ||
+      lastMessage.content.trim() ||
+      !lastMessage.hasAttachments ||
+      !sourceMessage?.fileIds?.length
+    ) {
+      return lastMessage;
+    }
+
+    const attachmentNames = await resolveAttachmentNames(chatId, sourceMessage.fileIds, chatKey);
+    if (attachmentNames.length === 0) {
+      return lastMessage;
+    }
+
+    return {
+      ...lastMessage,
+      content: formatAttachmentNamesPreview(attachmentNames),
+      attachmentNames
+    };
   };
 
   const resolveChatAvatarUrl = async (
@@ -177,6 +302,24 @@ function createChatsStore() {
     }
   };
 
+  const decryptPinnedMessagesForDisplay = async (
+    pinnedMessages: PinnedMessage[] = [],
+    chatKey: CryptoKey | null,
+    members: Chat['members'] = []
+  ) => {
+    if (!pinnedMessages.length) {
+      return [];
+    }
+
+    const memberMap = getMemberMap(members ?? []);
+    return Promise.all(
+      pinnedMessages.map(async (entry) => ({
+        ...entry,
+        message: await decryptMessageForDisplay(entry.message, chatKey, memberMap)
+      }))
+    );
+  };
+
   const hydrateChat = async (
     chatDetail: Chat,
     unreadCount = 0,
@@ -203,10 +346,20 @@ function createChatsStore() {
         messages = currentChat?.messages ?? [];
       }
     }
+      const pinnedMessages = chatDetail.pinnedMessages
+        ? await decryptPinnedMessagesForDisplay(chatDetail.pinnedMessages, chatKey, members)
+        : currentChat?.pinnedMessages ?? [];
 
     const oldestMessage = messages[0];
     const hasReachedBeginning = Boolean(
       oldestMessage && isSystemMessage(oldestMessage) && parseSystemMessage(oldestMessage.content).event === 'chat_created'
+    );
+
+    const lastMessage = await enrichLastMessageAttachments(
+      chatDetail.id,
+      buildLastMessage(messages, members),
+      messages[messages.length - 1],
+      chatKey
     );
 
     return {
@@ -218,9 +371,10 @@ function createChatsStore() {
       unreadCount,
       avatarUrl,
       otherUser: getOtherUser(chatDetail, authState.user?.id),
-      lastMessage: buildLastMessage(messages, members),
+      lastMessage,
       messages,
       chatKey,
+      pinnedMessages,
       isHydrated: false,
       hasReachedBeginning,
       typingUsers: currentChat?.typingUsers ?? []
@@ -253,10 +407,17 @@ function createChatsStore() {
       oldestMessage && isSystemMessage(oldestMessage) && parseSystemMessage(oldestMessage.content).event === 'chat_created'
     );
 
+    const lastMessage = await enrichLastMessageAttachments(
+      chatId,
+      buildLastMessage(messages, chatDetail.members ?? []),
+      messages[messages.length - 1],
+      chatKey
+    );
+
     const nextChat: Chat = {
       ...hydratedBase,
       messages,
-      lastMessage: buildLastMessage(messages, chatDetail.members ?? []),
+      lastMessage,
       unreadCount: messageMeta?.unreadCount ?? existingChat?.unreadCount ?? 0,
       firstUnreadId: messageMeta?.firstUnreadId ?? existingChat?.firstUnreadId ?? null,
       unreadMarkerId:
@@ -266,7 +427,8 @@ function createChatsStore() {
       hasReachedBeginning,
       isHydrated: true,
       isLoadingMessages: false,
-      isLoadingOlderMessages: false
+      isLoadingOlderMessages: false,
+      pinnedMessages: hydratedBase.pinnedMessages ?? existingChat?.pinnedMessages ?? []
     };
 
     upsertChat(nextChat);
@@ -341,7 +503,13 @@ function createChatsStore() {
     finalizeClosedChat: (chatId: string) => {
       clearUnreadMarkerIfResolved(chatId);
     },
-    sendMessage: async (chatId: string, content: string, fileIds: string[] = []) => {
+    sendMessage: async (
+      chatId: string,
+      content: string,
+      fileIds: string[] = [],
+      attachmentNames: string[] = [],
+      replyToMessageId: string | null = null
+    ) => {
       const authState = getRequiredAuth();
       const chat = await ensureChatLoaded(chatId);
 
@@ -350,27 +518,57 @@ function createChatsStore() {
       }
 
       const encryptedContent = content ? await crypto.encryptMessage(chat.chatKey, content) : '';
-      const message = await api.chats.sendMessage(chatId, encryptedContent, fileIds);
+      const message = await api.chats.sendMessage(chatId, encryptedContent, fileIds, replyToMessageId);
+      const replyMessage = replyToMessageId
+        ? chat.messages?.find((item) => item.id === replyToMessageId) ?? null
+        : null;
       const nextMessage: Message = {
         ...message,
         content,
         fileIds,
+        reply: replyMessage
+          ? {
+              id: replyMessage.id,
+              senderId: replyMessage.senderId,
+              senderUsername: replyMessage.senderUsername ?? 'Unknown',
+              content: replyMessage.content,
+              fileIds: replyMessage.fileIds,
+              isDeleted: false
+            }
+          : message.reply ?? null,
         senderUsername: authState.user?.username || 'Me'
       };
 
       mergeMessages(chatId, [nextMessage], false);
-      updateChatById(chatId, {
-        unreadMarkerId: null,
-        unreadCount: 0,
-        firstUnreadId: null,
-        typingUsers: []
-      });
+      update((chatList) =>
+        chatList.map((item) => {
+          if (item.id !== chatId) return item;
+
+          const messages = item.messages ?? [];
+          const lastMessage = buildLastMessage(messages, item.members ?? []);
+          return {
+            ...item,
+            unreadMarkerId: null,
+            unreadCount: 0,
+            firstUnreadId: null,
+            typingUsers: [],
+            lastMessage:
+              lastMessage && !content.trim() && fileIds.length > 0 && attachmentNames.length > 0
+                ? {
+                    ...lastMessage,
+                    content: formatAttachmentNamesPreview(attachmentNames),
+                    attachmentNames
+                  }
+                : lastMessage
+          };
+        })
+      );
       return nextMessage;
     },
     sendTyping: async (chatId: string) => {
       await api.chats.sendTyping(chatId);
     },
-    editMessage: async (chatId: string, messageId: string, content: string) => {
+    editMessage: async (chatId: string, messageId: string, content: string, replyToMessageId?: string | null) => {
       const chat = await ensureChatLoaded(chatId);
       if (!chat?.chatKey) {
         throw new Error('Chat key is not available');
@@ -378,22 +576,41 @@ function createChatsStore() {
 
       const existingMessage = chat.messages?.find((message) => message.id === messageId);
       const encryptedContent = await crypto.encryptMessage(chat.chatKey, content);
-      const updatedMessage = await api.messages.edit(messageId, encryptedContent, existingMessage?.fileIds ?? []);
+      const updatedMessage = await api.messages.edit(
+        messageId,
+        encryptedContent,
+        existingMessage?.fileIds ?? [],
+        replyToMessageId ?? existingMessage?.replyToMessageId ?? null
+      );
+      const decryptedUpdatedMessage = await decryptMessageForDisplay(
+        {
+          ...updatedMessage,
+          senderUsername: existingMessage?.senderUsername
+        },
+        chat.chatKey,
+        new Map((chat.members ?? []).map((member) => [member.id, member.username]))
+      );
 
       update((chatList) =>
         chatList.map((item) => {
           if (item.id !== chatId) return item;
 
-          const messages = (item.messages ?? []).map((message) =>
-            message.id === updatedMessage.id
-              ? { ...message, content, fileIds: updatedMessage.fileIds, editedAt: updatedMessage.editedAt }
-              : message
+          const baseMessages = (item.messages ?? []).map((message) =>
+            message.id === updatedMessage.id ? { ...message, ...decryptedUpdatedMessage } : message
+          );
+          const sourceMessage = baseMessages.find((message) => message.id === updatedMessage.id) ?? decryptedUpdatedMessage;
+          const synced = syncDerivedMessageState(
+            baseMessages,
+            item.pinnedMessages ?? [],
+            updatedMessage.id,
+            sourceMessage
           );
 
           return {
             ...item,
-            messages,
-            lastMessage: buildLastMessage(messages, item.members ?? [])
+            messages: synced.messages,
+            pinnedMessages: synced.pinnedMessages,
+            lastMessage: buildLastMessage(synced.messages, item.members ?? [])
           };
         })
       );
@@ -403,21 +620,39 @@ function createChatsStore() {
     deleteMessage: async (chatId: string, messageId: string) => {
       const result = await api.messages.delete(messageId);
 
-      update((chatList) =>
-        chatList.map((item) => {
-          if (item.id !== chatId) return item;
+      const existingChat = findChat(chatId);
+      const decryptedPinnedMessages = existingChat
+        ? await decryptPinnedMessagesForDisplay(
+            result.pinnedMessages ?? [],
+            existingChat.chatKey ?? null,
+            existingChat.members ?? []
+          )
+        : [];
 
-          const messages = (item.messages ?? []).filter((message) => message.id !== messageId);
-          return {
-            ...item,
-            messages,
-            lastMessage: buildLastMessage(messages, item.members ?? [])
-          };
-        })
-      );
+        update((chatList) =>
+          chatList.map((item) => {
+            if (item.id !== chatId) return item;
+
+            const baseMessages = (item.messages ?? []).filter((message) => message.id !== messageId);
+            const synced = syncDerivedMessageState(
+              baseMessages,
+              result.pinnedMessages ? decryptedPinnedMessages : item.pinnedMessages ?? [],
+              messageId,
+              null
+            );
+
+            return {
+              ...item,
+              messages: synced.messages,
+              pinnedMessages: result.pinnedMessages ? decryptedPinnedMessages : synced.pinnedMessages,
+              lastMessage: buildLastMessage(synced.messages, item.members ?? [])
+            };
+          })
+        );
 
       return {
-        deletedFileIds: result.deletedFileIds ?? []
+        deletedFileIds: result.deletedFileIds ?? [],
+        pinnedMessages: decryptedPinnedMessages
       };
     },
     createChat: async (data: {
@@ -530,6 +765,45 @@ function createChatsStore() {
       await api.chats.delete(chatId);
       removeChat(chatId);
     },
+    loadPins: async (chatId: string) => {
+      const chat = await ensureChatLoaded(chatId);
+      const pinnedMessages = await decryptPinnedMessagesForDisplay(
+        await api.chats.getPins(chatId),
+        chat?.chatKey ?? null,
+        chat?.members ?? []
+      );
+      setPinnedMessages(chatId, pinnedMessages);
+      return pinnedMessages;
+    },
+    pinMessage: async (chatId: string, messageId: string) => {
+      const chat = await ensureChatLoaded(chatId);
+      const pinnedMessages = await decryptPinnedMessagesForDisplay(
+        await api.chats.pinMessage(chatId, messageId),
+        chat?.chatKey ?? null,
+        chat?.members ?? []
+      );
+      setPinnedMessages(chatId, pinnedMessages);
+      return pinnedMessages;
+    },
+    unpinMessage: async (chatId: string, messageId: string) => {
+      const chat = await ensureChatLoaded(chatId);
+      const pinnedMessages = await decryptPinnedMessagesForDisplay(
+        await api.chats.unpinMessage(chatId, messageId),
+        chat?.chatKey ?? null,
+        chat?.members ?? []
+      );
+      setPinnedMessages(chatId, pinnedMessages);
+      return pinnedMessages;
+    },
+    handlePinsUpdated: async (chatId: string, pinnedMessages: PinnedMessage[]) => {
+      const chat = findChat(chatId);
+      const decryptedPinnedMessages = await decryptPinnedMessagesForDisplay(
+        pinnedMessages,
+        chat?.chatKey ?? null,
+        chat?.members ?? []
+      );
+      setPinnedMessages(chatId, decryptedPinnedMessages);
+    },
     handleMemberEvent: async (event: MemberEventPayload) => {
       const authState = getRequiredAuth();
 
@@ -616,8 +890,26 @@ function createChatsStore() {
       if (!chat) return;
 
       if (!incomingMessage.content && (!incomingMessage.fileIds || incomingMessage.fileIds.length === 0)) {
-        const messages = (chat.messages ?? []).filter((message) => message.id !== incomingMessage.id);
-        replaceMessages(chatId, messages);
+        update((chatList) =>
+          chatList.map((item) => {
+            if (item.id !== chatId) return item;
+
+            const baseMessages = (item.messages ?? []).filter((message) => message.id !== incomingMessage.id);
+            const synced = syncDerivedMessageState(
+              baseMessages,
+              item.pinnedMessages ?? [],
+              incomingMessage.id,
+              null
+            );
+
+            return {
+              ...item,
+              messages: synced.messages,
+              pinnedMessages: synced.pinnedMessages,
+              lastMessage: buildLastMessage(synced.messages, item.members ?? [])
+            };
+          })
+        );
         return;
       }
 
@@ -632,21 +924,30 @@ function createChatsStore() {
           chatList.map((item) => {
             if (item.id !== chatId) return item;
 
-            const messages = (item.messages ?? []).map((message) =>
+            const baseMessages = (item.messages ?? []).map((message) =>
               message.id === incomingMessage.id
                 ? {
                     ...message,
+                    ...decryptedMessage,
                     content: decryptedMessage.content,
                     fileIds: incomingMessage.fileIds ?? message.fileIds,
                     editedAt: incomingMessage.editedAt
                   }
                 : message
             );
+            const sourceMessage = baseMessages.find((message) => message.id === incomingMessage.id) ?? decryptedMessage;
+            const synced = syncDerivedMessageState(
+              baseMessages,
+              item.pinnedMessages ?? [],
+              incomingMessage.id,
+              sourceMessage
+            );
 
             return {
               ...item,
-              messages,
-              lastMessage: buildLastMessage(messages, item.members ?? [])
+              messages: synced.messages,
+              pinnedMessages: synced.pinnedMessages,
+              lastMessage: buildLastMessage(synced.messages, item.members ?? [])
             };
           })
         );
@@ -660,6 +961,11 @@ function createChatsStore() {
             chat.chatKey ?? null,
             new Map((chat.members ?? []).map((member) => [member.id, member.username]))
           );
+
+      const incomingAttachmentNames =
+        !nextMessage.content.trim() && nextMessage.fileIds.length > 0
+          ? await resolveAttachmentNames(chatId, nextMessage.fileIds, chat.chatKey ?? null)
+          : [];
 
       const isOwnMessage = incomingMessage.senderId === authState.user?.id;
 
@@ -683,7 +989,20 @@ function createChatsStore() {
             unreadCount: nextUnreadCount,
             unreadMarkerId,
             typingUsers: (item.typingUsers ?? []).filter((entry) => entry.userId !== nextMessage.senderId),
-            lastMessage: buildLastMessage(messages, item.members ?? [])
+            lastMessage:
+              !nextMessage.content.trim() && nextMessage.fileIds.length > 0 && incomingAttachmentNames.length > 0
+                ? {
+                    ...(buildLastMessage(messages, item.members ?? []) ?? {
+                      senderId: nextMessage.senderId,
+                      senderUsername: nextMessage.senderUsername,
+                      content: '',
+                      isSystem: false,
+                      hasAttachments: true
+                    }),
+                    content: formatAttachmentNamesPreview(incomingAttachmentNames),
+                    attachmentNames: incomingAttachmentNames
+                  }
+                : buildLastMessage(messages, item.members ?? [])
           };
         })
       );

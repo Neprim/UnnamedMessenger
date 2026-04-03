@@ -8,6 +8,7 @@ const {
   validateAttachableFileIds,
   setMessageFileIds,
   getMessageFileIdsMap,
+  getReplyPreviewByMessageId,
   mapMessageRow
 } = require('../utils/message-files');
 
@@ -23,7 +24,7 @@ function createSystemMessage(chatId, eventType, data) {
   ).run(messageId, chatId, content, timestamp);
   
   const message = db.prepare(
-    'SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE id = ?'
+    'SELECT id, chat_id, sender_id, content, reply_to_message_id, timestamp, edited_at FROM messages WHERE id = ?'
   ).get(messageId);
 
   return mapMessageRow(message);
@@ -51,7 +52,38 @@ function mapChatRow(chat) {
   };
 }
 
+function getPinnedMessages(chatId) {
+  const pinnedRows = db.prepare(`
+    SELECT pm.chat_id, pm.message_id, pm.pinned_by, pm.created_at,
+      u.username AS pinned_by_username,
+      m.id, m.chat_id, m.sender_id, m.content, m.reply_to_message_id, m.timestamp, m.edited_at
+    FROM pinned_messages pm
+    JOIN messages m ON m.id = pm.message_id
+    LEFT JOIN users u ON u.id = pm.pinned_by
+    WHERE pm.chat_id = ?
+    ORDER BY pm.created_at ASC
+  `).all(chatId);
+
+  const fileIdsByMessage = getMessageFileIdsMap(pinnedRows.map((row) => row.id));
+  const replyPreviewByMessageId = getReplyPreviewByMessageId(pinnedRows);
+
+  return pinnedRows.map((row) => ({
+    chatId: row.chat_id,
+    pinnedBy: row.pinned_by,
+    pinnedByUsername: row.pinned_by_username ?? 'Unknown',
+    pinnedAt: row.created_at,
+    message: mapMessageRow(row, fileIdsByMessage, replyPreviewByMessageId)
+  }));
+}
+
 function removeUserMessagesFromChat(chatId, userId) {
+  db.prepare(`
+    DELETE FROM pinned_messages
+    WHERE chat_id = ?
+      AND message_id IN (
+        SELECT id FROM messages WHERE chat_id = ? AND sender_id = ?
+      )
+  `).run(chatId, chatId, userId);
   db.prepare('DELETE FROM messages WHERE chat_id = ? AND sender_id = ?').run(chatId, userId);
 }
 
@@ -209,7 +241,8 @@ router.post('/', authenticate, (req, res) => {
         username: m.username,
         avatarUrl: getAvatarUrl(m.id, m.avatar_updated_at),
         encryptedKey: m.encrypted_chat_key
-      }))
+      })),
+      pinnedMessages: []
     });
   } catch (err) {
     console.error('Create chat error:', err);
@@ -256,7 +289,8 @@ router.get('/:chatId', authenticate, (req, res) => {
         username: m.username,
         avatarUrl: getAvatarUrl(m.id, m.avatar_updated_at),
         encryptedKey: m.encrypted_chat_key
-      }))
+      })),
+      pinnedMessages: getPinnedMessages(chat.id)
     });
   } catch (err) {
     console.error('Get chat error:', err);
@@ -517,7 +551,7 @@ router.get('/:chatId/messages', authenticate, (req, res) => {
       // Load N messages BEFORE cursor
       const cursorMsg = db.prepare('SELECT timestamp FROM messages WHERE id = ?').get(cursor);
       if (cursorMsg) {
-        const query = 'SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE chat_id = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT ?';
+        const query = 'SELECT id, chat_id, sender_id, content, reply_to_message_id, timestamp, edited_at FROM messages WHERE chat_id = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT ?';
         messages = db.prepare(query).all(req.params.chatId, cursorMsg.timestamp, beforeCntNum + 1);
         hasMoreBefore = messages.length > beforeCntNum;
         if (hasMoreBefore) messages.pop();
@@ -527,14 +561,14 @@ router.get('/:chatId/messages', authenticate, (req, res) => {
       // Load N messages AFTER cursor
       const cursorMsg = db.prepare('SELECT timestamp FROM messages WHERE id = ?').get(cursor);
       if (cursorMsg) {
-        const query = 'SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE chat_id = ? AND timestamp > ? ORDER BY timestamp ASC LIMIT ?';
+        const query = 'SELECT id, chat_id, sender_id, content, reply_to_message_id, timestamp, edited_at FROM messages WHERE chat_id = ? AND timestamp > ? ORDER BY timestamp ASC LIMIT ?';
         messages = db.prepare(query).all(req.params.chatId, cursorMsg.timestamp, afterCntNum + 1);
         hasMoreAfter = messages.length > afterCntNum;
         if (hasMoreAfter) messages.pop();
       }
     } else {
       // Default: load last N messages
-      let query = 'SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE chat_id = ?';
+      let query = 'SELECT id, chat_id, sender_id, content, reply_to_message_id, timestamp, edited_at FROM messages WHERE chat_id = ?';
       const params = [req.params.chatId];
       
       if (cursor) {
@@ -573,9 +607,10 @@ router.get('/:chatId/messages', authenticate, (req, res) => {
     }
     
     const fileIdsByMessage = getMessageFileIdsMap(messages.map((message) => message.id));
+    const replyPreviewByMessageId = getReplyPreviewByMessageId(messages);
 
     res.json({
-      messages: messages.map((message) => mapMessageRow(message, fileIdsByMessage)),
+      messages: messages.map((message) => mapMessageRow(message, fileIdsByMessage, replyPreviewByMessageId)),
       hasMoreBefore,
       hasMoreAfter,
       firstUnreadId,
@@ -734,7 +769,7 @@ router.put('/:chatId/avatar', authenticate, (req, res) => {
 
 router.post('/:chatId/messages', authenticate, (req, res) => {
   try {
-    const { content } = req.body;
+    const { content, replyToMessageId } = req.body;
     const fileValidation = validateAttachableFileIds(req.params.chatId, req.body.fileIds);
     if (!fileValidation.ok) {
       return res.status(400).json({
@@ -761,29 +796,132 @@ router.post('/:chatId/messages', authenticate, (req, res) => {
     if (content && content.length > 10000) {
       return res.status(400).json({ error: 'Message exceeds 10000 characters' });
     }
+
+    if (replyToMessageId !== undefined && replyToMessageId !== null) {
+      if (typeof replyToMessageId !== 'string' || !replyToMessageId.trim()) {
+        return res.status(400).json({ error: 'replyToMessageId must be a non-empty string or null' });
+      }
+
+      const replyTarget = db.prepare('SELECT id FROM messages WHERE id = ? AND chat_id = ?').get(replyToMessageId, req.params.chatId);
+      if (!replyTarget) {
+        return res.status(400).json({ error: 'Reply target message not found in this chat' });
+      }
+    }
     
     const messageId = uuidv4();
     
-    db.prepare('INSERT INTO messages (id, chat_id, sender_id, content) VALUES (?, ?, ?, ?)').run(
+    db.prepare('INSERT INTO messages (id, chat_id, sender_id, content, reply_to_message_id) VALUES (?, ?, ?, ?, ?)').run(
       messageId,
       req.params.chatId,
       req.userId,
-      content || null
+      content || null,
+      replyToMessageId || null
     );
     setMessageFileIds(messageId, fileIds);
 
-    const message = db.prepare('SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE id = ?').get(messageId);
+    const message = db.prepare('SELECT id, chat_id, sender_id, content, reply_to_message_id, timestamp, edited_at FROM messages WHERE id = ?').get(messageId);
     
     // Mark sender's messages as read
     db.prepare('UPDATE chat_members SET last_read_at = ? WHERE chat_id = ? AND user_id = ?').run(message.timestamp, req.params.chatId, req.userId);
     
-    const response = mapMessageRow(message);
+    const response = mapMessageRow(
+      message,
+      getMessageFileIdsMap([messageId]),
+      getReplyPreviewByMessageId([message])
+    );
     
     broadcastToChatMembers(req.params.chatId, 'new_message', response, req.userId);
     
     res.status(201).json(response);
   } catch (err) {
     console.error('Send message error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/:chatId/pins', authenticate, (req, res) => {
+  try {
+    const chat = db.prepare('SELECT id FROM chats WHERE id = ?').get(req.params.chatId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    const isMember = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(req.params.chatId, req.userId);
+    if (!isMember) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    res.json(getPinnedMessages(req.params.chatId));
+  } catch (err) {
+    console.error('Get pinned messages error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/:chatId/pins', authenticate, (req, res) => {
+  try {
+    const { messageId } = req.body;
+    if (typeof messageId !== 'string' || !messageId.trim()) {
+      return res.status(400).json({ error: 'messageId is required' });
+    }
+
+    const chat = db.prepare('SELECT id FROM chats WHERE id = ?').get(req.params.chatId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    const isMember = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(req.params.chatId, req.userId);
+    if (!isMember) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const message = db.prepare('SELECT id FROM messages WHERE id = ? AND chat_id = ?').get(messageId, req.params.chatId);
+    if (!message) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+
+    db.prepare(`
+      INSERT INTO pinned_messages (chat_id, message_id, pinned_by, created_at)
+      VALUES (?, ?, ?, strftime('%s', 'now'))
+      ON CONFLICT(chat_id, message_id) DO NOTHING
+    `).run(req.params.chatId, messageId, req.userId);
+
+    const pinnedMessages = getPinnedMessages(req.params.chatId);
+    broadcastToChatMembers(req.params.chatId, 'pins_updated', {
+      chatId: req.params.chatId,
+      pinnedMessages
+    });
+
+    res.status(201).json(pinnedMessages);
+  } catch (err) {
+    console.error('Pin message error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/:chatId/pins/:messageId', authenticate, (req, res) => {
+  try {
+    const chat = db.prepare('SELECT id FROM chats WHERE id = ?').get(req.params.chatId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    const isMember = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(req.params.chatId, req.userId);
+    if (!isMember) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    db.prepare('DELETE FROM pinned_messages WHERE chat_id = ? AND message_id = ?').run(req.params.chatId, req.params.messageId);
+
+    const pinnedMessages = getPinnedMessages(req.params.chatId);
+    broadcastToChatMembers(req.params.chatId, 'pins_updated', {
+      chatId: req.params.chatId,
+      pinnedMessages
+    });
+
+    res.json(pinnedMessages);
+  } catch (err) {
+    console.error('Unpin message error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

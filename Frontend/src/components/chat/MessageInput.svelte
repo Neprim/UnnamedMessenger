@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, tick } from 'svelte';
 
   export let value = '';
   export let disabled = false;
@@ -16,6 +16,15 @@
   }>();
 
   let fileInput: HTMLInputElement | null = null;
+  let textareaElement: HTMLTextAreaElement | null = null;
+
+  function getMaxTextareaHeight() {
+    if (typeof window === 'undefined') {
+      return 320;
+    }
+
+    return Math.max(200, Math.floor(window.innerHeight * 0.5));
+  }
 
   function openFilePicker() {
     if (attachmentsDisabled) return;
@@ -45,23 +54,48 @@
       dispatch('pickfiles', { files: clipboardFiles });
     }
   }
+
+  function submitMessage() {
+    dispatch('submit');
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      submitMessage();
+    }
+  }
+
+  function resizeTextarea() {
+    if (!textareaElement) return;
+
+    const maxHeight = getMaxTextareaHeight();
+    textareaElement.style.height = 'auto';
+    textareaElement.style.height = `${Math.min(textareaElement.scrollHeight, maxHeight)}px`;
+    textareaElement.style.overflowY = textareaElement.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }
+
+  $: tick().then(resizeTextarea);
 </script>
 
-<form class="input-area" class:drag-active={dragActive} on:submit|preventDefault={() => dispatch('submit')}>
+<form class="input-area" class:drag-active={dragActive} on:submit|preventDefault={submitMessage}>
   <input bind:this={fileInput} class="file-input" type="file" multiple on:change={handleFileChange} />
   <button class="attach-btn" type="button" on:click={openFilePicker} disabled={attachmentsDisabled} title="Прикрепить файл">+</button>
   <button class="library-btn" type="button" on:click={openLibrary} disabled={attachmentsDisabled} title="Выбрать из файлов чата">
     <span class="library-icon" aria-hidden="true">🖼</span>
     <span class="library-label">Из чата</span>
   </button>
-  <input
+  <textarea
     id="messageInput"
-    type="text"
+    bind:this={textareaElement}
     bind:value
+    class="message-textarea"
+    rows="1"
     placeholder="Введите сообщение..."
     disabled={disabled}
     on:paste={handlePaste}
-  />
+    on:keydown={handleKeyDown}
+  ></textarea>
   <button type="submit" disabled={disabled || (!value.trim() && attachments.length === 0)}>
     {sending ? '...' : 'Отправить'}
   </button>
@@ -98,6 +132,7 @@
 
   .input-area {
     display: flex;
+    align-items: flex-end;
     gap: 12px;
     padding: 16px 24px;
     border-top: 1px solid #e0e0e0;
@@ -115,6 +150,7 @@
   .library-btn {
     width: 44px;
     min-width: 44px;
+    height: 44px;
     border-radius: 22px;
     border: none;
     background: #eef2f7;
@@ -160,31 +196,39 @@
     line-height: 1;
   }
 
-  input {
+  .message-textarea {
     flex: 1;
-    padding: 14px 20px;
+    min-width: 0;
+    min-height: 44px;
+    max-height: 50vh;
+    padding: 11px 20px;
     border: 1px solid #ddd;
     border-radius: 24px;
     font-size: 15px;
+    line-height: 1.4;
+    resize: none;
+    overflow-y: hidden;
+    font-family: inherit;
     transition:
       border-color 0.18s ease,
       box-shadow 0.18s ease,
       background 0.18s ease;
   }
 
-  input:focus {
+  .message-textarea:focus {
     outline: none;
     border-color: #4caf50;
   }
 
-  .input-area.drag-active input {
+  .input-area.drag-active .message-textarea {
     border-color: #2563eb;
     background: white;
     box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
   }
 
-  button {
+  button[type='submit'] {
     padding: 14px 28px;
+    min-height: 44px;
     background: #4caf50;
     color: white;
     border: none;
@@ -257,6 +301,13 @@
     }
 
     .attach-btn,
+    .library-btn,
+    .message-textarea,
+    button[type='submit'] {
+      min-height: 40px;
+    }
+
+    .attach-btn,
     .library-btn {
       width: 40px;
       height: 40px;
@@ -277,15 +328,14 @@
       font-size: 17px;
     }
 
-    input {
-      min-width: 0;
-      padding: 12px 16px;
+    .message-textarea {
+      padding: 10px 16px;
       font-size: 14px;
+      max-height: 50vh;
     }
 
     button[type='submit'] {
       padding: 12px 18px;
-      min-height: 40px;
       font-size: 14px;
     }
 

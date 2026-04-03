@@ -31,20 +31,21 @@
       <div class="empty">Пока нет чатов</div>
     {:else}
       {#each chats as chat}
+        {@const chatTitle = chat.type === 'pm' ? (chat.otherUser?.username || 'Личный чат') : (chat.name || 'Групповой чат')}
         <a href="#/chats/{chat.id}" class="chat-item" class:selected={selectedChatId === chat.id}>
           {#if chat.type === 'pm'}
             {#key `${chat.id}:${chat.otherUser?.avatarUrl ?? ''}`}
-              <Avatar name={chat.otherUser?.username || 'Личный чат'} src={chat.otherUser?.avatarUrl} size={44} />
+              <Avatar name={chatTitle} src={chat.otherUser?.avatarUrl} size={44} />
             {/key}
           {:else}
             {#key `${chat.id}:${chat.avatarUrl ?? ''}`}
-              <Avatar name={chat.name || 'Групповой чат'} src={chat.avatarUrl} size={44} />
+              <Avatar name={chatTitle} src={chat.avatarUrl} size={44} />
             {/key}
           {/if}
 
           <div class="chat-info">
             <div class="chat-name">
-              {chat.type === 'pm' ? (chat.otherUser?.username || 'Личный чат') : (chat.name || 'Групповой чат')}
+              <span class="chat-name-text" title={chatTitle}>{chatTitle}</span>
               {#if chat.unreadCount && chat.unreadCount > 0}
                 <span class="unread-badge">{chat.unreadCount}</span>
               {/if}
@@ -59,10 +60,21 @@
                     {#if chat.lastMessage.senderUsername}
                       {chat.lastMessage.senderUsername}:
                     {/if}
-                    <em class="attachment-marker">&lt;вложение&gt;</em>
+                    <em class="attachment-marker" title={chat.lastMessage.attachmentNames?.join(', ') || 'Вложения'}>
+                      {chat.lastMessage.attachmentNames?.length ? chat.lastMessage.attachmentNames.join(', ') : '<вложение>'}
+                    </em>
+                  </span>
+                {:else if chat.lastMessage.hasAttachments && chat.lastMessage.attachmentNames?.length && chat.lastMessage.content === chat.lastMessage.attachmentNames.join(', ')}
+                  <span class="last-message">
+                    {#if chat.lastMessage.senderUsername}
+                      {chat.lastMessage.senderUsername}:
+                    {/if}
+                    <em class="attachment-marker" title={chat.lastMessage.content}>{chat.lastMessage.content}</em>
                   </span>
                 {:else}
-                  <span class="last-message">{chat.lastMessage.senderUsername ? `${chat.lastMessage.senderUsername}: ` : ''}{chat.lastMessage.content}</span>
+                  <span class="last-message">
+                    {chat.lastMessage.senderUsername ? `${chat.lastMessage.senderUsername}: ` : ''}{chat.lastMessage.content}
+                  </span>
                 {/if}
               {:else}
                 {chat.memberCount} участников
@@ -165,15 +177,22 @@
   .chat-name {
     font-weight: 600;
     font-size: 15px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
+  }
+
+  .chat-name-text {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .unread-badge {
+    flex-shrink: 0;
     background: #f44336;
     color: white;
     font-size: 11px;

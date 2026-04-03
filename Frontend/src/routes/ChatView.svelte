@@ -2,7 +2,7 @@
   import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
-  import { deletedFilesEvent } from '../lib/sse';
+  import { deletedFilesEvent, pinsUpdatedEvent } from '../lib/sse';
   import * as cryptoLib from '../lib/crypto';
   import { cacheFile, getCachedFile, invalidateCachedFile, type CachedFileAsset } from '../lib/file-cache';
   import MessageList from '../components/chat/MessageList.svelte';
@@ -10,6 +10,7 @@
   import ChatImagePickerModal from '../components/chat/ChatImagePickerModal.svelte';
   import ChatAttachmentBrowserModal from '../components/chat/ChatAttachmentBrowserModal.svelte';
   import ChatImageCarouselModal from '../components/chat/ChatImageCarouselModal.svelte';
+  import PinnedMessagesModal from '../components/chat/PinnedMessagesModal.svelte';
   import MembersModal from '../components/chat/MembersModal.svelte';
   import AvatarCropModal from '../components/settings/AvatarCropModal.svelte';
   import { getFavoriteChatImageIds, toggleFavoriteChatImage } from '../lib/chat-image-favorites';
@@ -34,6 +35,7 @@
   let showImageLibraryModal = false;
   let showAttachmentBrowserModal = false;
   let showImageCarouselModal = false;
+  let showPinnedMessagesModal = false;
   let showLeaveChatModal = false;
   let showRemoveMemberModal = false;
   let showDeleteMessageModal = false;
@@ -71,6 +73,10 @@
   let selectedReusableAttachments: Array<{ id: string; fileId: string; name: string; size: number }> = [];
   let memberToRemove: ChatMember | null = null;
   let messagePendingDeletionId: string | null = null;
+  let replyTarget: Message | null = null;
+  let activePinnedIndex = 0;
+  let activePinnedChatId: string | null = null;
+  let activePinnedCount = 0;
   let leaveDeleteMessages = false;
   let leaveDeleteFiles = false;
   let removeDeleteMessages = false;
@@ -134,12 +140,40 @@
   $: canAddMembers = Boolean(isCreator && selectedChat?.type === 'gm');
   $: isCreator = selectedChat?.createdBy === $auth.user?.id;
   $: isOwnMessage = contextMenu.senderId === $auth.user?.id;
+  $: isPinnedMessage = Boolean(selectedChat?.pinnedMessages?.some((item) => item.message.id === contextMenu.messageId));
   $: typingMemberNames = (selectedChat?.typingUsers ?? [])
     .map((entry) => selectedChat?.members?.find((member) => member.id === entry.userId)?.username)
     .filter((username): username is string => Boolean(username));
   $: memberAvatarUrls = Object.fromEntries((selectedChat?.members ?? []).map((member) => [member.id, member.avatarUrl ?? null]));
   $: visibleFileIds = Array.from(new Set(messages.flatMap((message) => message.fileIds)));
   $: isDragActive = dragDepth > 0;
+  $: pinnedMessages = selectedChat?.pinnedMessages ?? [];
+  $: if ((selectedChat?.id ?? null) !== activePinnedChatId) {
+    activePinnedChatId = selectedChat?.id ?? null;
+    activePinnedIndex = Math.max(0, pinnedMessages.length - 1);
+    activePinnedCount = pinnedMessages.length;
+  }
+  $: if ((selectedChat?.id ?? null) === activePinnedChatId && pinnedMessages.length !== activePinnedCount) {
+    if (pinnedMessages.length > activePinnedCount) {
+      activePinnedIndex = Math.max(0, pinnedMessages.length - 1);
+    } else if (activePinnedIndex >= pinnedMessages.length) {
+      activePinnedIndex = Math.max(0, pinnedMessages.length - 1);
+    }
+    activePinnedCount = pinnedMessages.length;
+  }
+  $: if (activePinnedIndex >= pinnedMessages.length) {
+    activePinnedIndex = Math.max(0, pinnedMessages.length - 1);
+  }
+  $: currentPinnedMessage = pinnedMessages[activePinnedIndex] ?? null;
+  $: pinnedCounterLabel = pinnedMessages.length > 0 ? `📌 ${activePinnedIndex + 1}/${pinnedMessages.length}` : '';
+  $: if (replyTarget) {
+    const currentReplyTarget = messages.find((message) => message.id === replyTarget?.id) ?? null;
+    if (!currentReplyTarget) {
+      replyTarget = null;
+    } else if (currentReplyTarget !== replyTarget) {
+      replyTarget = currentReplyTarget;
+    }
+  }
 
   type MessageGroup = {
     senderId: string;
@@ -389,6 +423,145 @@
     contextMenu = { x: 0, y: 0, messageId: '', senderId: null, visible: false };
   }
 
+  async function handleCopyMessage() {
+    const message = messages.find((item) => item.id === contextMenu.messageId);
+    closeContextMenu();
+
+    if (!message?.content?.trim()) {
+      showSoonToast('В сообщении нет текста для копирования');
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(message.content);
+      showSoonToast('Текст сообщения скопирован');
+    } catch {
+      showSoonToast('Не удалось скопировать текст сообщения');
+    }
+  }
+
+  function getReplyPreviewText(message: Message | null | undefined) {
+    if (!message?.reply) {
+      return '';
+    }
+
+    if (message.reply.isDeleted) {
+      return 'Сообщение удалено';
+    }
+
+    if (message.reply.content?.trim()) {
+      return message.reply.content;
+    }
+
+    if (message.reply.fileIds.length > 0) {
+      return 'Вложение';
+    }
+
+    return 'Сообщение';
+  }
+
+  function getReplyTargetPreviewText(message: Message | null | undefined) {
+    if (!message) {
+      return '';
+    }
+
+    const attachmentNames = message.fileIds
+      .map((fileId) => fileDisplayById[fileId]?.name?.trim() || '')
+      .filter(Boolean);
+
+    if (message.content?.trim()) {
+      return message.content;
+    }
+
+    if (message.fileIds.length > 0) {
+      return attachmentNames.length > 0 ? attachmentNames.join(', ') : 'Вложение';
+    }
+
+    return 'Сообщение';
+  }
+
+  function isAttachmentOnlyMessage(message: Message | null | undefined) {
+    return Boolean(message && !message.content?.trim() && message.fileIds.length > 0);
+  }
+
+  function getPinnedPreviewText(message: Message | null | undefined) {
+    if (!message) {
+      return '';
+    }
+
+    const attachmentNames = message.fileIds
+      .map((fileId) => fileDisplayById[fileId]?.name?.trim() || '')
+      .filter(Boolean);
+
+    if (message.content?.trim()) {
+      return message.content;
+    }
+
+    if (message.fileIds.length > 0) {
+      return attachmentNames.length > 0 ? attachmentNames.join(', ') : 'Вложение';
+    }
+
+    return 'Сообщение';
+  }
+
+  function scrollToMessage(messageId: string | null | undefined) {
+    if (!messageId || !messagesContainer) {
+      return;
+    }
+
+    const target = messagesContainer.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function startReply(message: Message) {
+    replyTarget = message;
+    closeContextMenu();
+    requestAnimationFrame(() => {
+      (document.getElementById('messageInput') as HTMLTextAreaElement | null)?.focus();
+    });
+  }
+
+  async function togglePinFromMenu() {
+    const messageId = contextMenu.messageId;
+    closeContextMenu();
+    if (!messageId || !selectedChat?.id) {
+      return;
+    }
+
+    try {
+      if (isPinnedMessage) {
+        await chats.unpinMessage(selectedChat.id, messageId);
+      } else {
+        const nextPinnedMessages = await chats.pinMessage(selectedChat.id, messageId);
+        activePinnedIndex = Math.max(0, nextPinnedMessages.length - 1);
+      }
+    } catch (exception) {
+      showSoonToast(exception instanceof Error ? exception.message : 'Не удалось обновить закреп');
+    }
+  }
+
+  async function unpinMessage(messageId: string) {
+    if (!selectedChat?.id) {
+      return;
+    }
+
+    try {
+      const nextPinnedMessages = await chats.unpinMessage(selectedChat.id, messageId);
+      if (nextPinnedMessages.length === 0) {
+        showPinnedMessagesModal = false;
+        activePinnedIndex = 0;
+      } else if (currentPinnedMessage?.message.id === messageId) {
+        activePinnedIndex = Math.max(0, Math.min(activePinnedIndex, nextPinnedMessages.length - 1));
+      }
+    } catch (exception) {
+      showSoonToast(exception instanceof Error ? exception.message : 'Не удалось снять закреп');
+    }
+  }
+
   function groupMessages(source: Message[], members: ChatMember[] = []): MessageGroup[] {
     const memberMap = new Map(members.map((member) => [member.id, member.username]));
     const groups: MessageGroup[] = [];
@@ -518,6 +691,10 @@
   function cancelEdit() {
     editingMessage = null;
     editingText = '';
+  }
+
+  function cancelReply() {
+    replyTarget = null;
   }
 
   function clearError() {
@@ -1058,11 +1235,20 @@
         });
       }
 
-      await chats.sendMessage(params.id, newMessage, [
-        ...selectedReusableAttachments.map((attachment) => attachment.fileId),
-        ...uploadedFileIds
-      ]);
+      const reusableAttachmentNames = selectedReusableAttachments.map((attachment) => attachment.name);
+      const uploadedAttachmentNames = pendingAttachments.map((attachment) => attachment.metadata.name);
+      await chats.sendMessage(
+        params.id,
+        newMessage,
+        [
+          ...selectedReusableAttachments.map((attachment) => attachment.fileId),
+          ...uploadedFileIds
+        ],
+        [...reusableAttachmentNames, ...uploadedAttachmentNames],
+        replyTarget?.id ?? null
+      );
       newMessage = '';
+      replyTarget = null;
       pendingAttachments = [];
       selectedReusableAttachments = [];
       shouldStickToBottom = true;
@@ -1070,7 +1256,7 @@
         if (messagesContainer) {
           messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
-        (document.getElementById('messageInput') as HTMLInputElement | null)?.focus();
+        (document.getElementById('messageInput') as HTMLTextAreaElement | null)?.focus();
       });
     } catch (exception) {
       if (uploadedFileIds.length > 0) {
@@ -1088,6 +1274,9 @@
   async function handleDeleteMessage(messageId: string) {
     try {
       const result = await chats.deleteMessage(params.id, messageId);
+      if (replyTarget?.id === messageId) {
+        replyTarget = null;
+      }
       await cleanupDeletedFiles(params.id, result?.deletedFileIds ?? []);
     } catch (exception) {
       error = exception instanceof Error ? exception.message : 'Не удалось удалить сообщение';
@@ -1630,6 +1819,7 @@
     clearError();
     pendingAttachments = [];
     selectedReusableAttachments = [];
+    replyTarget = null;
     imageLibraryItems = [];
     showImageLibraryModal = false;
     showAttachmentBrowserModal = false;
@@ -1671,10 +1861,20 @@
     deletedFilesEvent.set(null);
   });
 
+  const unsubscribePinsUpdatedEvent = pinsUpdatedEvent.subscribe((event) => {
+    if (!event) {
+      return;
+    }
+
+    chats.handlePinsUpdated(event.chatId, event.pinnedMessages).catch(() => {});
+    pinsUpdatedEvent.set(null);
+  });
+
   onDestroy(() => {
     if (scrollTimeout) clearTimeout(scrollTimeout);
     if (errorTimeout) clearTimeout(errorTimeout);
     unsubscribeDeletedFilesEvent();
+    unsubscribePinsUpdatedEvent();
     resetFileCaches();
   });
 </script>
@@ -1706,25 +1906,50 @@
       aria-label="Открыть информацию о чате"
     >
       <div class="chat-header-text">
-        <h2>{chatDisplayName}</h2>
-      </div>
-    </button>
-  </div>
+          <h2>{chatDisplayName}</h2>
+        </div>
+      </button>
+    </div>
 
-  {#if !selectedChat?.isHydrated && !messages.length}
+    {#if currentPinnedMessage}
+      <div class="pinned-bar">
+        <button
+          type="button"
+          class="pinned-main"
+          on:click={() => scrollToMessage(currentPinnedMessage.message.id)}
+          title="Перейти к закреплённому сообщению"
+        >
+          <span class="pinned-label">{pinnedCounterLabel}</span>
+            <span class="pinned-content" class:attachment-only={isAttachmentOnlyMessage(currentPinnedMessage.message)}>
+              <strong>{currentPinnedMessage.message.senderUsername || 'Unknown'}:</strong>
+              {getPinnedPreviewText(currentPinnedMessage.message)}
+            </span>
+          </button>
+        {#if pinnedMessages.length > 1}
+          <div class="pinned-nav">
+            <button type="button" class="pinned-nav-btn" on:click={() => (activePinnedIndex = (activePinnedIndex - 1 + pinnedMessages.length) % pinnedMessages.length)} aria-label="Предыдущий закреп">‹</button>
+            <button type="button" class="pinned-nav-btn" on:click={() => (activePinnedIndex = (activePinnedIndex + 1) % pinnedMessages.length)} aria-label="Следующий закреп">›</button>
+          </div>
+        {/if}
+        <button type="button" class="pinned-action-btn" on:click={() => (showPinnedMessagesModal = true)}>Все</button>
+        <button type="button" class="pinned-action-btn danger" on:click={() => unpinMessage(currentPinnedMessage.message.id)}>Снять</button>
+      </div>
+    {/if}
+  
+    {#if !selectedChat?.isHydrated && !messages.length}
     <div class="loading">Загрузка...</div>
   {:else}
-    {#if error}
-      <div class="error-toast" role="alert" aria-live="assertive">
-        <span>{error}</span>
+      {#if error}
+        <div class="error-toast" role="alert" aria-live="assertive">
+          <span>{error}</span>
         <button type="button" class="error-toast-close" on:click={clearError} aria-label="Закрыть ошибку">
           ×
         </button>
-      </div>
-    {/if}
+        </div>
+      {/if}
 
-    <MessageList
-      bind:container={messagesContainer}
+      <MessageList
+        bind:container={messagesContainer}
       {groupedMessages}
       currentUserId={$auth.user?.id}
       {showPlaceholder}
@@ -1735,6 +1960,7 @@
       unreadMarkerId={selectedChat?.unreadMarkerId}
       on:scroll={handleContainerScroll}
       on:fileclick={(event) => handleOpenMessageFile(event.detail.fileId, event.detail.messageFileIds)}
+      on:replyclick={(event) => scrollToMessage(event.detail.messageId)}
       on:messagecontextmenu={(event) => handleContextMenu(event.detail.event, event.detail.messageId, event.detail.senderId)}
     />
 
@@ -1747,6 +1973,17 @@
         {:else}
           Несколько человек печатают...
         {/if}
+      </div>
+    {/if}
+
+    {#if replyTarget}
+      <div class="reply-bar">
+        <button type="button" class="reply-bar-main" on:click={() => scrollToMessage(replyTarget?.id)}>
+            <span class="reply-bar-text" class:attachment-only={isAttachmentOnlyMessage(replyTarget)}>
+              <strong>{replyTarget.senderUsername || 'Unknown'}:</strong> {getReplyTargetPreviewText(replyTarget)}
+            </span>
+          </button>
+        <button type="button" class="reply-bar-close" on:click={cancelReply} aria-label="Отменить ответ">×</button>
       </div>
     {/if}
 
@@ -1782,9 +2019,20 @@
 
   {#if contextMenu.visible}
     <div class="context-menu" style="left: {contextMenu.x}px; top: {contextMenu.y}px;" role="menu">
-      <button class="context-menu-item disabled" type="button" disabled>Ответить</button>
-      <button class="context-menu-item disabled" type="button" disabled>Закрепить</button>
-      <button class="context-menu-item disabled" type="button" disabled>Скопировать</button>
+      <button
+        class="context-menu-item"
+        type="button"
+        on:click={() => {
+          const message = messages.find((item) => item.id === contextMenu.messageId);
+          if (message) startReply(message);
+        }}
+      >
+        Ответить
+      </button>
+      <button class="context-menu-item" type="button" on:click={togglePinFromMenu}>
+        {isPinnedMessage ? 'Снять закреп' : 'Закрепить'}
+      </button>
+      <button class="context-menu-item" type="button" on:click={handleCopyMessage}>Скопировать</button>
       {#if isOwnMessage}
         <button
           class="context-menu-item"
@@ -1980,6 +2228,25 @@
   />
 {/if}
 
+{#if showPinnedMessagesModal}
+  <PinnedMessagesModal
+      items={pinnedMessages}
+      {fileDisplayById}
+      activeMessageId={currentPinnedMessage?.message.id ?? null}
+    on:close={() => (showPinnedMessagesModal = false)}
+    on:open={(event) => {
+      const messageId = event.detail.messageId;
+      const nextIndex = pinnedMessages.findIndex((item) => item.message.id === messageId);
+      if (nextIndex !== -1) {
+        activePinnedIndex = nextIndex;
+      }
+      showPinnedMessagesModal = false;
+      tick().then(() => scrollToMessage(messageId));
+    }}
+    on:unpin={(event) => unpinMessage(event.detail.messageId)}
+  />
+{/if}
+
 {#if showLeaveChatModal}
   <div class="modal-shell">
     <button class="modal-overlay" type="button" aria-label="Закрыть окно выхода из чата" on:click={() => (showLeaveChatModal = false)}></button>
@@ -2157,6 +2424,83 @@
     color: #2563eb;
   }
 
+  .pinned-bar {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    padding: 8px 24px 10px;
+    border-bottom: 1px solid #eef2f7;
+    background: #f8fafc;
+  }
+
+  .pinned-main {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 12px;
+    background: #e8f0fe;
+    color: #0f172a;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .pinned-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1d4ed8;
+    white-space: nowrap;
+  }
+
+  .pinned-content {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 13px;
+  }
+
+  .pinned-content.attachment-only {
+    font-style: italic;
+  }
+
+  .pinned-nav {
+    display: flex;
+    gap: 6px;
+  }
+
+  .pinned-nav-btn {
+    width: 36px;
+    min-width: 36px;
+    border: none;
+    border-radius: 10px;
+    background: #e2e8f0;
+    color: #0f172a;
+    cursor: pointer;
+    font-size: 18px;
+  }
+
+  .pinned-action-btn {
+    min-width: 60px;
+    padding: 0 14px;
+    border: none;
+    border-radius: 10px;
+    background: #e2e8f0;
+    color: #0f172a;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .pinned-action-btn.danger {
+    background: #fee2e2;
+    color: #b91c1c;
+  }
+
   .loading {
     flex: 1;
     display: flex;
@@ -2213,6 +2557,52 @@
     font-size: 13px;
     color: #6b7280;
     font-style: italic;
+  }
+
+  .reply-bar {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px 24px 8px;
+  }
+
+  .reply-bar-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 12px;
+    background: #f1f5f9;
+    color: #0f172a;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .reply-bar-text {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    color: #475569;
+  }
+
+  .reply-bar-text.attachment-only {
+    font-style: italic;
+  }
+
+  .reply-bar-close {
+    width: 36px;
+    min-width: 36px;
+    border: none;
+    border-radius: 10px;
+    background: #e2e8f0;
+    color: #334155;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
   }
 
   .edit-area input {
@@ -2426,6 +2816,23 @@
 
     .drop-overlay {
       padding: 0 14px 92px;
+    }
+
+    .pinned-bar {
+      padding: 8px 12px 10px;
+      flex-wrap: wrap;
+    }
+
+    .pinned-nav {
+      order: 2;
+    }
+
+    .pinned-action-btn {
+      min-height: 36px;
+    }
+
+    .reply-bar {
+      padding: 10px 12px 8px;
     }
 
     .drop-overlay-card {

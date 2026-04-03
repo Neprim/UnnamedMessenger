@@ -106,16 +106,95 @@ function getMessageFileIds(messageId) {
   return getMessageFileIdsMap([messageId]).get(messageId) || [];
 }
 
-function mapMessageRow(message, fileIdsByMessage = null) {
+function getReplyPreviewMap(messages) {
+  const result = new Map();
+  const replyIds = Array.from(
+    new Set(
+      messages
+        .map((message) => message.reply_to_message_id)
+        .filter((replyId) => typeof replyId === 'string' && replyId.length > 0)
+    )
+  );
+
+  if (replyIds.length === 0) {
+    return result;
+  }
+
+  const placeholders = replyIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.sender_id, m.content, u.username AS sender_username
+       FROM messages m
+       LEFT JOIN users u ON u.id = m.sender_id
+       WHERE m.id IN (${placeholders})`
+    )
+    .all(...replyIds);
+
+  const fileIdsByMessage = getMessageFileIdsMap(rows.map((row) => row.id));
+  const rowMap = new Map(rows.map((row) => [row.id, row]));
+
+  replyIds.forEach((replyId) => {
+    const row = rowMap.get(replyId);
+    if (!row) {
+      result.set(replyId, {
+        id: replyId,
+        senderId: null,
+        senderUsername: 'Удалённое сообщение',
+        content: '',
+        fileIds: [],
+        isDeleted: true
+      });
+      return;
+    }
+
+    result.set(replyId, {
+      id: row.id,
+      senderId: row.sender_id,
+      senderUsername: row.sender_username ?? 'Unknown',
+      content: row.content ?? '',
+      fileIds: fileIdsByMessage.get(row.id) || [],
+      isDeleted: false
+    });
+  });
+
+  return result;
+}
+
+function getReplyPreviewByMessageId(messages) {
+  const previewByReplyId = getReplyPreviewMap(messages);
+  const result = new Map();
+
+  messages.forEach((message) => {
+    const replyId = message.reply_to_message_id;
+    if (!replyId) {
+      result.set(message.id, null);
+      return;
+    }
+
+    result.set(message.id, previewByReplyId.get(replyId) || null);
+  });
+
+  return result;
+}
+
+function mapMessageRow(message, fileIdsByMessage = null, replyPreviewByMessageId = null) {
   const fileIds = fileIdsByMessage
     ? fileIdsByMessage.get(message.id) || []
     : getMessageFileIds(message.id);
+
+  const replyToMessageId = message.reply_to_message_id ?? null;
+  const reply =
+    replyToMessageId && replyPreviewByMessageId
+      ? replyPreviewByMessageId.get(message.id) || null
+      : null;
 
   return {
     id: message.id,
     chatId: message.chat_id,
     senderId: message.sender_id,
     content: message.content,
+    replyToMessageId,
+    reply,
     fileIds,
     timestamp: message.timestamp,
     editedAt: message.edited_at
@@ -128,5 +207,7 @@ module.exports = {
   validateAttachableFileIds,
   getMessageFileIdsMap,
   getMessageFileIds,
+  getReplyPreviewMap,
+  getReplyPreviewByMessageId,
   mapMessageRow
 };

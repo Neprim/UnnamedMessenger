@@ -4,6 +4,7 @@ import type {
   ChatFileRecord,
   CreateChatRequest,
   Message,
+  PinnedMessage,
   SearchUserResult
 } from './types';
 
@@ -212,22 +213,35 @@ export const api = {
     sendTyping: (chatId: string) =>
       request<{ success: boolean }>(`/chats/${chatId}/typing`, { method: 'POST' }),
     
-    sendMessage: (chatId: string, content: string, fileIds?: string[]) => 
+    getPins: (chatId: string) => request<PinnedMessage[]>(`/chats/${chatId}/pins`),
+
+    pinMessage: (chatId: string, messageId: string) =>
+      request<PinnedMessage[]>(`/chats/${chatId}/pins`, {
+        method: 'POST',
+        body: JSON.stringify({ messageId })
+      }),
+
+    unpinMessage: (chatId: string, messageId: string) =>
+      request<PinnedMessage[]>(`/chats/${chatId}/pins/${messageId}`, {
+        method: 'DELETE'
+      }),
+
+    sendMessage: (chatId: string, content: string, fileIds?: string[], replyToMessageId?: string | null) => 
       request<Message>(`/chats/${chatId}/messages`, { 
         method: 'POST', 
-        body: JSON.stringify({ content, fileIds }) 
+        body: JSON.stringify({ content, fileIds, replyToMessageId }) 
       })
   },
 
   messages: {
-    edit: (messageId: string, content: string, fileIds?: string[]) => 
+    edit: (messageId: string, content: string, fileIds?: string[], replyToMessageId?: string | null) => 
       request<Message>(`/messages/${messageId}`, { 
         method: 'PUT', 
-        body: JSON.stringify({ content, fileIds }) 
+        body: JSON.stringify({ content, fileIds, replyToMessageId }) 
       }),
     
     delete: (messageId: string) => 
-      request<{ message: string; deletedFileIds?: string[] }>(`/messages/${messageId}`, { method: 'DELETE' })
+      request<{ message: string; deletedFileIds?: string[]; pinnedMessages?: PinnedMessage[] }>(`/messages/${messageId}`, { method: 'DELETE' })
   },
 
   files: {

@@ -24,6 +24,7 @@ function tableExists(tableName) {
 
 function recreateSchema() {
   db.exec(`
+    DROP TABLE IF EXISTS pinned_messages;
     DROP TABLE IF EXISTS message_files;
     DROP TABLE IF EXISTS files;
     DROP TABLE IF EXISTS messages;
@@ -41,8 +42,10 @@ function ensureSchema() {
     !tableExists('messages') ||
     !tableExists('files') ||
     !tableExists('message_files') ||
+    !tableExists('pinned_messages') ||
     columnExists('messages', 'file_ids') ||
-    !columnExists('chats', 'avatar_file_id');
+    !columnExists('chats', 'avatar_file_id') ||
+    !columnExists('messages', 'reply_to_message_id');
 
   if (needsReset) {
     recreateSchema();
@@ -88,6 +91,7 @@ function ensureSchema() {
       chat_id TEXT NOT NULL,
       sender_id TEXT,
       content TEXT,
+      reply_to_message_id TEXT,
       timestamp INTEGER DEFAULT (strftime('%s', 'now')),
       edited_at INTEGER,
       FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
@@ -116,20 +120,40 @@ function ensureSchema() {
       FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS pinned_messages (
+      chat_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      pinned_by TEXT NOT NULL,
+      created_at INTEGER DEFAULT (strftime('%s', 'now')),
+      PRIMARY KEY (chat_id, message_id),
+      FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
+      FOREIGN KEY (pinned_by) REFERENCES users(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_message_id);
     CREATE INDEX IF NOT EXISTS idx_chat_members_user ON chat_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_users_registration_ip ON users(registration_ip);
     CREATE INDEX IF NOT EXISTS idx_files_chat_created_at ON files(chat_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_files_uploaded_by ON files(uploaded_by);
     CREATE INDEX IF NOT EXISTS idx_chats_avatar_file_id ON chats(avatar_file_id);
     CREATE INDEX IF NOT EXISTS idx_message_files_file_id ON message_files(file_id);
+    CREATE INDEX IF NOT EXISTS idx_pinned_messages_chat ON pinned_messages(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_pinned_messages_message ON pinned_messages(message_id);
   `);
 
   if (!columnExists('users', 'registration_ip')) {
     db.exec(`
       ALTER TABLE users ADD COLUMN registration_ip TEXT;
       CREATE INDEX IF NOT EXISTS idx_users_registration_ip ON users(registration_ip);
+    `);
+  }
+
+  if (!columnExists('messages', 'reply_to_message_id')) {
+    db.exec(`
+      ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT;
+      CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_message_id);
     `);
   }
 }

@@ -71,10 +71,50 @@ export async function decryptMessageForDisplay(
   chatKey: CryptoKey | null,
   memberMap: Map<string, string>
 ): Promise<Message> {
+  const isLikelyEncryptedPayload = (value: string) => {
+    if (!value || typeof value !== 'string') {
+      return false;
+    }
+
+    try {
+      return crypto.base64ToBytes(value).length > 12;
+    } catch {
+      return false;
+    }
+  };
+
+  const decryptReply = async () => {
+    if (!message.reply) {
+      return null;
+    }
+
+    if (message.reply.isDeleted || !chatKey || !message.reply.content) {
+      return {
+        ...message.reply,
+        senderUsername: message.reply.senderUsername || memberMap.get(message.reply.senderId ?? '') || 'Unknown'
+      };
+    }
+
+    try {
+      return {
+        ...message.reply,
+        senderUsername: message.reply.senderUsername || memberMap.get(message.reply.senderId ?? '') || 'Unknown',
+        content: await crypto.decryptMessage(chatKey, message.reply.content)
+      };
+    } catch {
+      return {
+        ...message.reply,
+        senderUsername: message.reply.senderUsername || memberMap.get(message.reply.senderId ?? '') || 'Unknown',
+        content: isLikelyEncryptedPayload(message.reply.content) ? '[Decryption failed]' : message.reply.content
+      };
+    }
+  };
+
   if (isSystemMessage(message) || !chatKey) {
     return {
       ...message,
       content: message.content ?? '',
+      reply: await decryptReply(),
       fileIds: message.fileIds ?? [],
       senderUsername: message.senderId ? memberMap.get(message.senderId) ?? 'Unknown' : message.senderUsername
     };
@@ -84,6 +124,7 @@ export async function decryptMessageForDisplay(
     return {
       ...message,
       content: '',
+      reply: await decryptReply(),
       fileIds: message.fileIds ?? [],
       senderUsername: message.senderId ? memberMap.get(message.senderId) ?? 'Unknown' : message.senderUsername
     };
@@ -93,9 +134,14 @@ export async function decryptMessageForDisplay(
 
   try {
     const content = await crypto.decryptMessage(chatKey, message.content);
-    return { ...message, content, senderUsername };
+    return { ...message, content, reply: await decryptReply(), senderUsername };
   } catch {
-    return { ...message, content: '[Decryption failed]', senderUsername };
+    return {
+      ...message,
+      content: isLikelyEncryptedPayload(message.content) ? '[Decryption failed]' : message.content,
+      reply: await decryptReply(),
+      senderUsername
+    };
   }
 }
 
@@ -132,6 +178,13 @@ export function buildLastMessage(messages: Message[], members: ChatMember[] = []
     isSystem: false,
     hasAttachments: Array.isArray(lastMessage.fileIds) && lastMessage.fileIds.length > 0
   };
+}
+
+export function formatAttachmentNamesPreview(names: string[]): string {
+  return names
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .join(', ');
 }
 
 export function formatFileSize(size: number): string {

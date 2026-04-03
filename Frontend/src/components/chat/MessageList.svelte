@@ -54,7 +54,40 @@
     scroll: Event;
     messagecontextmenu: { event: MouseEvent; messageId: string; senderId: string | null };
     fileclick: { fileId: string; messageFileIds: string[] };
+    replyclick: { messageId: string };
   }>();
+
+  function getAttachmentPreview(fileIds: string[]) {
+    const names = fileIds
+      .map((fileId) => fileDisplayById[fileId]?.name?.trim() || '')
+      .filter(Boolean);
+
+    if (names.length === 0) {
+      return 'Вложение';
+    }
+
+    return names.join(', ');
+  }
+
+  function getReplyPreviewText(message: Message) {
+    if (!message.reply) {
+      return '';
+    }
+
+    if (message.reply.isDeleted) {
+      return 'Сообщение удалено';
+    }
+
+    if (message.reply.content?.trim()) {
+      return message.reply.content;
+    }
+
+    if (message.reply.fileIds.length > 0) {
+      return getAttachmentPreview(message.reply.fileIds);
+    }
+
+    return 'Сообщение';
+  }
 </script>
 
 <div class="messages" bind:this={container} on:scroll={(event) => dispatch('scroll', event)}>
@@ -81,6 +114,7 @@
           />
           <span class="sender-name">{group.senderUsername || 'Unknown'}</span>
         </div>
+
         {#each group.messages as msg}
           {#if unreadMarkerId && msg.id === unreadMarkerId}
             <div class="unread-divider" role="separator" aria-label="Новые сообщения">
@@ -89,6 +123,7 @@
               <span class="unread-line"></span>
             </div>
           {/if}
+
           <div class="message-row" class:own={msg.senderId === currentUserId}>
             <div
               class="message"
@@ -99,11 +134,26 @@
               on:contextmenu={(event) => dispatch('messagecontextmenu', { event, messageId: msg.id, senderId: msg.senderId })}
             >
               <div class="message-body" class:own={msg.senderId === currentUserId} class:file-only={!msg.content && msg.fileIds.length > 0}>
+                {#if msg.reply}
+                  <button
+                    type="button"
+                    class="reply-preview"
+                    class:deleted={msg.reply.isDeleted}
+                    on:click|stopPropagation={() => dispatch('replyclick', { messageId: msg.reply!.id })}
+                    title="Перейти к сообщению"
+                  >
+                    <span class="reply-preview-line" class:attachment-only={!msg.reply.isDeleted && !msg.reply.content?.trim() && msg.reply.fileIds.length > 0}>
+                      <strong>{msg.reply.senderUsername}:</strong> {getReplyPreviewText(msg)}
+                    </span>
+                  </button>
+                {/if}
+
                 {#if msg.content}
                   <div class="message-text-area">
                     <div class="message-content">{msg.content}</div>
                   </div>
                 {/if}
+
                 {#if msg.fileIds.length > 0}
                   <div class="message-files" class:with-text={Boolean(msg.content)}>
                     {#each msg.fileIds as fileId}
@@ -187,6 +237,7 @@
                 {/if}
               </div>
             </div>
+
             <span class="msg-time" title={new Date(msg.timestamp * 1000).toLocaleString()}>
               {new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               {#if msg.editedAt}
@@ -321,6 +372,35 @@
   .message-body.file-only {
     background: transparent;
     border-radius: 0;
+  }
+
+  .reply-preview {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 12px 0;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .reply-preview-line {
+    display: block;
+    font-size: 11px;
+    line-height: 1.25;
+    color: #475569;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .reply-preview-line.attachment-only {
+    font-style: italic;
+  }
+
+  .reply-preview.deleted .reply-preview-line {
+    color: #94a3b8;
   }
 
   .message-text-area {
