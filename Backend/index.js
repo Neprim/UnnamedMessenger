@@ -13,7 +13,10 @@ if (typeof process.loadEnvFile === 'function' && fs.existsSync(envPath)) {
 }
 
 const config = require('./config');
-const { logServerError } = require('./utils/logger');
+const { logServerError, safeConsoleError, safeConsoleInfo } = require('./utils/logger');
+
+console.error = (...args) => safeConsoleError(...args);
+console.log = (...args) => safeConsoleInfo(...args);
 
 const app = express();
 
@@ -91,7 +94,7 @@ app.use((err, req, res, next) => {
     method: req.method,
     url: req.originalUrl
   });
-  console.error(err.stack);
+  safeConsoleError(err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
@@ -103,21 +106,19 @@ const httpsOptions = {
 const PORT = config.app.port;
 process.on('uncaughtException', (error) => {
   logServerError('process.uncaughtException', error);
-  console.error(error);
 });
 
 process.on('unhandledRejection', (reason) => {
   logServerError('process.unhandledRejection', reason);
-  console.error(reason);
 });
 
 if (isProduction) {
   https.createServer(httpsOptions, app).listen(PORT, () => {           
-    console.log(`Server running on port ${PORT} (HTTPS)`);             
+    safeConsoleInfo(`Server running on port ${PORT} (HTTPS)`);             
   }); 
 } else {
   app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    safeConsoleInfo(`Server running on port ${PORT}`);
   });
 }
 
