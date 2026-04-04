@@ -8,6 +8,7 @@
   export let attachmentsDisabled = false;
   export let dragActive = false;
   export let resetToken = 0;
+  export let maxLength = 8000;
 
   const dispatch = createEventDispatcher<{
     submit: void;
@@ -120,7 +121,7 @@
 </form>
 
 {#if showCharacterCount}
-  <div class="character-count">{value.length}</div>
+  <div class="character-count" class:over-limit={value.length > maxLength}>{value.length}/{maxLength}</div>
 {/if}
 
 {#if attachments.length > 0}
@@ -289,6 +290,11 @@
     font-size: 12px;
     line-height: 1;
     color: #64748b;
+  }
+
+  .character-count.over-limit {
+    color: #dc2626;
+    font-weight: 600;
   }
 
   .attachment-chip {

@@ -3,7 +3,7 @@
   import { push } from 'svelte-spa-router';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
-  import { chatDeletedEvent, chatUpdatedEvent, deletedFilesEvent, memberEvent, sseMessage, typingEvent, userPresenceEvent } from '../lib/sse';
+  import { chatDeletedEvent, chatUpdatedEvent, deletedFilesEvent, memberEvent, readStateEvent, sseMessage, typingEvent, userPresenceEvent } from '../lib/sse';
   import * as crypto from '../lib/crypto';
   import ChatSidebar from '../components/chat/ChatSidebar.svelte';
   import CreateChatModal from '../components/chat/CreateChatModal.svelte';
@@ -93,15 +93,78 @@
   let unsubscribeDeletedFiles: (() => void) | undefined;
   let unsubscribeChatUpdated: (() => void) | undefined;
   let unsubscribeUserPresence: (() => void) | undefined;
+  let unsubscribeReadState: (() => void) | undefined;
   let previousSelectedChatId: string | null = null;
+  let pinnedChatIds: string[] = [];
+  let pinnedChatStorageKey: string | null = null;
+  let loadedPinnedChatStorageKey: string | null = null;
 
   $: selectedChatId = params.id ?? null;
   $: selectedChatDetail = selectedChatId ? $chats.find((chat) => chat.id === selectedChatId) ?? null : null;
+  $: pinnedChatStorageKey = $auth.user?.id ? `unnamed-messenger:pinned-chats:${$auth.user.id}` : null;
+  $: displayedChats = [
+    ...$chats.filter((chat) => pinnedChatIds.includes(chat.id)),
+    ...$chats.filter((chat) => !pinnedChatIds.includes(chat.id))
+  ];
   $: if (previousSelectedChatId !== selectedChatId) {
     if (previousSelectedChatId) {
       chats.finalizeClosedChat(previousSelectedChatId);
     }
     previousSelectedChatId = selectedChatId;
+  }
+  $: if (typeof localStorage !== 'undefined' && pinnedChatStorageKey !== loadedPinnedChatStorageKey) {
+    loadedPinnedChatStorageKey = pinnedChatStorageKey;
+    pinnedChatIds = loadPinnedChatIds(pinnedChatStorageKey);
+  }
+
+  function loadPinnedChatIds(storageKey: string | null) {
+    if (!storageKey || typeof localStorage === 'undefined') {
+      return [];
+    }
+
+    try {
+      const rawValue = localStorage.getItem(storageKey);
+      if (!rawValue) {
+        return [];
+      }
+
+      const parsed = JSON.parse(rawValue);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+
+      return parsed.filter((value): value is string => typeof value === 'string');
+    } catch {
+      return [];
+    }
+  }
+
+  function savePinnedChatIds(nextPinnedChatIds: string[]) {
+    pinnedChatIds = [...new Set(nextPinnedChatIds)];
+
+    if (!pinnedChatStorageKey || typeof localStorage === 'undefined') {
+      return;
+    }
+
+    try {
+      localStorage.setItem(pinnedChatStorageKey, JSON.stringify(pinnedChatIds));
+    } catch {
+      // ignore localStorage write failures
+    }
+  }
+
+  function togglePinnedChat(event: CustomEvent<{ chatId: string }>) {
+    const { chatId } = event.detail;
+    if (!chatId) {
+      return;
+    }
+
+    if (pinnedChatIds.includes(chatId)) {
+      savePinnedChatIds(pinnedChatIds.filter((id) => id !== chatId));
+      return;
+    }
+
+    savePinnedChatIds([...pinnedChatIds, chatId]);
   }
 
   function resetCreateState() {
@@ -706,6 +769,12 @@
       chats.handlePresenceEvent(event.userId, event.isOnline);
       userPresenceEvent.set(null);
     });
+
+    unsubscribeReadState = readStateEvent.subscribe((event) => {
+      if (!event) return;
+      chats.handleReadStateEvent(event.chatId, event.userId, event.lastReadAt);
+      readStateEvent.set(null);
+    });
   });
 
   onDestroy(() => {
@@ -717,13 +786,22 @@
     unsubscribeDeletedFiles?.();
     unsubscribeChatUpdated?.();
     unsubscribeUserPresence?.();
+    unsubscribeReadState?.();
   });
 </script>
 
 <div class="layout" class:chat-open={Boolean(selectedChatId)}>
   <input id="avatarInput" class="hidden-input" type="file" accept="image/jpeg,image/png,image/webp" on:change={handleAvatarFileChange} />
   <div class="sidebar-wrap">
-    <ChatSidebar chats={$chats} {loading} {selectedChatId} on:create={() => (showCreateModal = true)} on:settings={() => (showSettingsModal = true)} />
+    <ChatSidebar
+      chats={displayedChats}
+      {loading}
+      {selectedChatId}
+      {pinnedChatIds}
+      on:create={() => (showCreateModal = true)}
+      on:settings={() => (showSettingsModal = true)}
+      on:togglepin={togglePinnedChat}
+    />
   </div>
 
   <main class="main">

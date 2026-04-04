@@ -7,6 +7,7 @@
   export let isCreator = false;
   export let chatType: ChatType = 'gm';
   export let currentUserId: string | undefined;
+  export let createdById: string | undefined;
   export let chatName = 'Чат';
   export let chatAvatarUrl: string | null | undefined = null;
   export let canAddMembers = false;
@@ -119,7 +120,7 @@
                   <span class="member-status-dot" class:online={member.isOnline}></span>
                   <span>{member.isOnline ? 'В сети' : 'Не в сети'}</span>
                   <span>·</span>
-                  <span>{member.id === currentUserId ? 'Вы' : 'Участник'}</span>
+                  <span>{member.id === createdById ? 'Создатель' : member.id === currentUserId ? 'Вы' : 'Участник'}</span>
                 </span>
                 <span class="member-role">{member.isOnline ? 'В сети' : 'Не в сети'}</span>
                 <span class="member-role">{member.id === currentUserId ? 'Вы' : 'Участник'}</span>

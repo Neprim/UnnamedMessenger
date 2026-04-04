@@ -49,6 +49,7 @@
       updatedAt: number;
     }
   > = {};
+  export let messageReadByOthers: Record<string, boolean> = {};
 
   const dispatch = createEventDispatcher<{
     scroll: Event;
@@ -242,6 +243,9 @@
               {new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               {#if msg.editedAt}
                 <span class="edited" title={new Date(msg.editedAt * 1000).toLocaleString()}>(изменено)</span>
+              {/if}
+              {#if messageReadByOthers[msg.id]}
+                <span class="read-mark" aria-label="Прочитано">✓</span>
               {/if}
             </span>
           </div>
@@ -512,6 +516,12 @@
     font-style: italic;
     color: #666;
     margin-left: 2px;
+  }
+
+  .read-mark {
+    margin-left: 4px;
+    color: #8b95a7;
+    font-weight: 700;
   }
 
   @media (max-width: 768px) {

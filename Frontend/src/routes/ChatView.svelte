@@ -13,6 +13,7 @@
   import PinnedMessagesModal from '../components/chat/PinnedMessagesModal.svelte';
   import ChatExportModal from '../components/chat/ChatExportModal.svelte';
   import MembersModal from '../components/chat/MembersModal.svelte';
+  import Avatar from '../components/common/Avatar.svelte';
   import AvatarCropModal from '../components/settings/AvatarCropModal.svelte';
   import { getFavoriteChatImageIds, toggleFavoriteChatImage } from '../lib/chat-image-favorites';
   import { createZipBlob } from '../lib/zip';
@@ -97,15 +98,27 @@
     senderId: null,
     visible: false
   };
+  let readByPopover: { x: number; y: number; messageId: string; visible: boolean } = {
+    x: 0,
+    y: 0,
+    messageId: '',
+    visible: false
+  };
   let editingMessage: { id: string; content: string; fileIds: string[] } | null = null;
   let editingText = '';
   let messagesContainer: HTMLDivElement | undefined;
   let scrollTimeout: ReturnType<typeof setTimeout> | null = null;
   let errorTimeout: ReturnType<typeof setTimeout> | null = null;
   let loadedChatId: string | null = null;
+  let renderedChatId: string | null = null;
   let composerResetToken = 0;
   let pendingReadCheckForChatId: string | null = null;
+  let isRestoringChatScroll = false;
   let shouldStickToBottom = true;
+  let scrollStateByChatId: Record<
+    string,
+    { anchorMessageId: string | null; anchorBottomOffset: number; stickToBottom: boolean }
+  > = {};
   let previousMessageCount = 0;
   let previousInlinePreviewCount = 0;
   let lastTypingSentAt = 0;
@@ -168,6 +181,16 @@
         contextMenu.senderId !== $auth.user?.id
     );
   $: isPinnedMessage = Boolean(selectedChat?.pinnedMessages?.some((item) => item.message.id === contextMenu.messageId));
+  $: readersByMessage = Object.fromEntries(
+    messages.map((message) => [
+      message.id,
+      (selectedChat?.members ?? []).filter(
+        (member) => member.id !== message.senderId && (member.lastReadAt ?? 0) >= message.timestamp
+      )
+    ])
+  );
+  $: readCountForContextMessage = (readersByMessage[contextMenu.messageId] ?? []).length;
+  $: readersForPopover = readersByMessage[readByPopover.messageId] ?? [];
   $: typingMemberNames = (selectedChat?.typingUsers ?? [])
     .map((entry) => selectedChat?.members?.find((member) => member.id === entry.userId)?.username)
     .filter((username): username is string => Boolean(username));
@@ -370,7 +393,7 @@
   }
 
   function handleContainerScroll() {
-    if (!messagesContainer || !selectedChat) return;
+    if (!messagesContainer || !selectedChat || !renderedChatId || renderedChatId !== selectedChat.id) return;
 
     const scrollTop = messagesContainer.scrollTop;
     const scrollHeight = messagesContainer.scrollHeight;
@@ -378,8 +401,17 @@
     const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
     const unreadCount = selectedChat.unreadCount || 0;
     shouldStickToBottom = isAtBottom;
+    const anchorState = getBottomVisibleMessageAnchor();
+    scrollStateByChatId = {
+      ...scrollStateByChatId,
+      [selectedChat.id]: {
+        anchorMessageId: anchorState?.messageId ?? null,
+        anchorBottomOffset: anchorState?.bottomOffset ?? 0,
+        stickToBottom: isAtBottom
+      }
+    };
 
-    if (isAtBottom && unreadCount > 0) {
+    if (isAtBottom && unreadCount > 0 && document.visibilityState === 'visible' && document.hasFocus()) {
       chats.markChatAsRead(params.id).catch(() => {});
     }
 
@@ -406,8 +438,16 @@
     }
   }
 
-  async function markChatAsReadIfFullyVisible() {
-    if (!messagesContainer || !selectedChat || !selectedChat.unreadCount) {
+  async function markChatAsReadIfFullyVisible(force = false) {
+    if (!messagesContainer || !selectedChat || (!selectedChat.unreadCount && !force)) {
+      return;
+    }
+
+    if (isRestoringChatScroll || renderedChatId !== selectedChat.id) {
+      return;
+    }
+
+    if (document.visibilityState !== 'visible' || !document.hasFocus()) {
       return;
     }
 
@@ -448,6 +488,10 @@
 
   function closeContextMenu() {
     contextMenu = { x: 0, y: 0, messageId: '', senderId: null, visible: false };
+  }
+
+  function closeReadByPopover() {
+    readByPopover = { x: 0, y: 0, messageId: '', visible: false };
   }
 
   async function handleCopyMessage() {
@@ -641,6 +685,14 @@
   }
 
   $: groupedMessages = groupMessages(messages, selectedChat?.members ?? []);
+  $: messageReadByOthers = Object.fromEntries(
+    messages.map((message) => [
+      message.id,
+      (selectedChat?.members ?? []).some(
+        (member) => member.id !== message.senderId && (member.lastReadAt ?? 0) >= message.timestamp
+      )
+    ])
+  );
   $: showPlaceholder = !(selectedChat?.hasReachedBeginning ?? false);
   $: if (messagesContainer) {
     const currentMessageCount = messages.length;
@@ -652,6 +704,7 @@
         if (messagesContainer) {
           messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
+        markChatAsReadIfFullyVisible(true).catch(() => {});
       });
     }
   }
@@ -695,6 +748,48 @@
       showDeleteMessageModal = true;
     }
     closeContextMenu();
+  }
+
+  async function handleMarkUnreadFromMenu() {
+    const message = messages.find((item) => item.id === contextMenu.messageId);
+    closeContextMenu();
+
+    if (!message || isSystemMessage(message)) {
+      return;
+    }
+
+    try {
+      await chats.setChatReadState(params.id, Math.max(0, message.timestamp - 1));
+    } catch (exception) {
+      error = exception instanceof Error ? exception.message : 'Не удалось пометить сообщение как непрочитанное';
+    }
+  }
+
+  function openReadByPopover() {
+    if (!contextMenu.messageId || readCountForContextMessage === 0) {
+      return;
+    }
+
+    readByPopover = {
+      x: contextMenu.x,
+      y: contextMenu.y,
+      messageId: contextMenu.messageId,
+      visible: true
+    };
+    closeContextMenu();
+
+    requestAnimationFrame(() => {
+      const popoverElement = document.querySelector('.read-by-popover') as HTMLElement | null;
+      if (!popoverElement) return;
+
+      const rect = popoverElement.getBoundingClientRect();
+      if (rect.right > window.innerWidth) {
+        readByPopover = { ...readByPopover, x: window.innerWidth - rect.width - 10 };
+      }
+      if (rect.bottom > window.innerHeight) {
+        readByPopover = { ...readByPopover, y: window.innerHeight - rect.height - 10 };
+      }
+    });
   }
 
   function handleEditFromMenu(message: Message) {
@@ -789,6 +884,97 @@
     }
 
     return null;
+  }
+
+  function getBottomVisibleMessageAnchor() {
+    if (!messagesContainer) {
+      return null;
+    }
+
+    const messageElements = Array.from(
+      messagesContainer.querySelectorAll('[data-message-id]')
+    ) as HTMLElement[];
+
+    if (messageElements.length === 0) {
+      return null;
+    }
+
+    const containerRect = messagesContainer.getBoundingClientRect();
+    let bottomVisibleElement: HTMLElement | null = null;
+
+    for (const element of messageElements) {
+      const rect = element.getBoundingClientRect();
+      const isVisible = rect.bottom > containerRect.top && rect.top < containerRect.bottom;
+      if (isVisible) {
+        bottomVisibleElement = element;
+      }
+    }
+
+    const targetElement = bottomVisibleElement ?? messageElements[messageElements.length - 1] ?? null;
+    if (!targetElement) {
+      return null;
+    }
+
+    const targetRect = targetElement.getBoundingClientRect();
+    return {
+      messageId: targetElement.dataset.messageId ?? null,
+      bottomOffset: containerRect.bottom - targetRect.bottom
+    };
+  }
+
+  function rememberCurrentChatScrollState() {
+    if (!messagesContainer || !renderedChatId) {
+      return;
+    }
+
+    const scrollTop = messagesContainer.scrollTop;
+    const scrollHeight = messagesContainer.scrollHeight;
+    const clientHeight = messagesContainer.clientHeight;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+    const anchorState = getBottomVisibleMessageAnchor();
+
+    scrollStateByChatId = {
+      ...scrollStateByChatId,
+      [renderedChatId]: {
+        anchorMessageId: anchorState?.messageId ?? null,
+        anchorBottomOffset: anchorState?.bottomOffset ?? 0,
+        stickToBottom: isAtBottom
+      }
+    };
+  }
+
+  function restoreChatScrollState(chatId: string) {
+    if (!messagesContainer) {
+      return;
+    }
+
+    const savedState = scrollStateByChatId[chatId];
+    if (!savedState?.anchorMessageId) {
+      shouldStickToBottom = true;
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      return;
+    }
+
+    const target = messagesContainer.querySelector(
+      `[data-message-id="${savedState.anchorMessageId}"]`
+    ) as HTMLElement | null;
+
+    if (!target) {
+      shouldStickToBottom = savedState.stickToBottom;
+      if (savedState.stickToBottom) {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
+      return;
+    }
+
+    shouldStickToBottom = savedState.stickToBottom;
+
+    const containerRect = messagesContainer.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const desiredBottom = containerRect.bottom - savedState.anchorBottomOffset;
+    const desiredScrollTop = messagesContainer.scrollTop + (targetRect.bottom - desiredBottom);
+    const maxScrollTop = Math.max(0, messagesContainer.scrollHeight - messagesContainer.clientHeight);
+    messagesContainer.scrollTop = Math.max(0, Math.min(desiredScrollTop, maxScrollTop));
   }
 
   function ensureInlineImagePreview(fileId: string, asset: CachedFileAsset) {
@@ -1438,7 +1624,6 @@
       return;
     }
 
-    showMembersModal = false;
     showAttachmentBrowserModal = true;
     loadingAttachmentBrowser = true;
     attachmentBrowserKind = kind;
@@ -2083,7 +2268,10 @@
   }
 
   $: if (params.id && params.id !== loadedChatId) {
+    rememberCurrentChatScrollState();
     loadedChatId = params.id;
+    chats.clearUnreadMarkerOnOpen(params.id);
+    isRestoringChatScroll = true;
     clearError();
     pendingAttachments = [];
     selectedReusableAttachments = [];
@@ -2100,19 +2288,30 @@
     chats
       .ensureChatLoaded(params.id)
       .then(() => {
-        shouldStickToBottom = true;
-        requestAnimationFrame(() => {
-          if (messagesContainer) {
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-          }
+        tick().then(() => {
+          requestAnimationFrame(() => {
+            if (messagesContainer) {
+              restoreChatScrollState(params.id);
+            }
+            renderedChatId = params.id;
+            isRestoringChatScroll = false;
+            markChatAsReadIfFullyVisible().catch(() => {});
+          });
         });
       })
       .catch((exception) => {
+        isRestoringChatScroll = false;
         error = exception instanceof Error ? exception.message : 'Не удалось загрузить чат';
       });
   }
 
-  $: if (selectedChat?.id && messagesContainer && (selectedChat.unreadCount ?? 0) > 0) {
+  $: if (
+    selectedChat?.id &&
+    messagesContainer &&
+    !isRestoringChatScroll &&
+    renderedChatId === selectedChat.id &&
+    (selectedChat.unreadCount ?? 0) > 0
+  ) {
     pendingReadCheckForChatId = selectedChat.id;
     tick().then(() => {
       if (pendingReadCheckForChatId !== selectedChat?.id) return;
@@ -2238,6 +2437,7 @@
       fileDisplayById={fileDisplayById}
       imagePreviewById={imagePreviewById}
       fileAssetById={fileAssetById}
+      {messageReadByOthers}
       unreadMarkerId={selectedChat?.unreadMarkerId}
       on:scroll={handleContainerScroll}
       on:fileclick={(event) => handleOpenMessageFile(event.detail.fileId, event.detail.messageFileIds)}
@@ -2275,6 +2475,7 @@
       attachmentsDisabled={sending || !chatKey}
       dragActive={isDragActive}
       resetToken={composerResetToken}
+      maxLength={MAX_MESSAGE_LENGTH}
       {sending}
       on:submit={handleSendMessage}
       on:pickfiles={(event) => handleFilePick(event.detail.files)}
@@ -2315,6 +2516,7 @@
         {isPinnedMessage ? 'Снять закреп' : 'Закрепить'}
       </button>
       <button class="context-menu-item" type="button" on:click={handleCopyMessage}>Скопировать</button>
+      <button class="context-menu-item" type="button" on:click={handleMarkUnreadFromMenu}>Пометить непрочитанным</button>
       {#if isOwnMessage}
         <button
           class="context-menu-item"
@@ -2330,8 +2532,28 @@
       {#if canDeleteContextMessage}
         <button class="context-menu-item danger" type="button" on:click={handleDeleteFromMenu}>Удалить</button>
       {/if}
+      {#if readCountForContextMessage > 0}
+        <button class="context-menu-item context-menu-item-meta" type="button" on:click={openReadByPopover}>{readCountForContextMessage} 👁</button>
+      {/if}
     </div>
     <button class="context-menu-overlay" type="button" on:click={closeContextMenu} aria-label="Закрыть меню"></button>
+  {/if}
+
+  {#if readByPopover.visible}
+    <div class="read-by-popover" style="left: {readByPopover.x}px; top: {readByPopover.y}px;" role="dialog" aria-modal="false" aria-label="Кто прочитал сообщение">
+      <div class="read-by-title">Прочитали</div>
+      <div class="read-by-list">
+        {#each readersForPopover as member}
+          <div class="read-by-item">
+            <Avatar name={member.username} src={member.avatarUrl} size={28} />
+            <div class="read-by-meta">
+              <span class="read-by-name">{member.username}</span>
+            </div>
+          </div>
+        {/each}
+      </div>
+    </div>
+    <button class="context-menu-overlay" type="button" on:click={closeReadByPopover} aria-label="Закрыть список прочитавших"></button>
   {/if}
 
   {#if isDragActive}
@@ -2466,6 +2688,7 @@
     {attachmentCounts}
     chatType={selectedChat?.type ?? 'gm'}
     currentUserId={$auth.user?.id}
+    createdById={selectedChat?.createdBy}
     chatName={chatDisplayName}
     chatAvatarUrl={chatDisplayAvatarUrl}
     on:close={() => (showMembersModal = false)}
@@ -3024,6 +3247,62 @@
     color: #f44336;
   }
 
+  .context-menu-item-meta {
+    border-top: 1px solid #eef2f7;
+    margin-top: 2px;
+  }
+
+  .read-by-popover {
+    position: fixed;
+    z-index: 100;
+    min-width: 220px;
+    max-width: min(320px, calc(100vw - 20px));
+    background: #ffffff;
+    border: 1px solid #dbe4ee;
+    border-radius: 12px;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+    overflow: hidden;
+  }
+
+  .read-by-title {
+    padding: 12px 14px 8px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #0f172a;
+    border-bottom: 1px solid #eef2f7;
+  }
+
+  .read-by-list {
+    display: flex;
+    flex-direction: column;
+    max-height: min(280px, 50vh);
+    overflow: auto;
+  }
+
+  .read-by-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+  }
+
+  .read-by-item + .read-by-item {
+    border-top: 1px solid #f1f5f9;
+  }
+
+  .read-by-meta {
+    min-width: 0;
+  }
+
+  .read-by-name {
+    display: block;
+    font-size: 14px;
+    color: #0f172a;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .modal-shell {
     position: fixed;
     inset: 0;
@@ -3235,4 +3514,3 @@
     }
   }
 </style>
-

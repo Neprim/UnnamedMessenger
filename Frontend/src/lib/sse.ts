@@ -2,7 +2,7 @@ import { writable } from 'svelte/store';
 import type { Message, PinnedMessage } from './types';
 
 export interface SSEEvent {
-  type: 'new_message' | 'message_deleted' | 'message_edited' | 'member_added' | 'member_removed' | 'member_left' | 'chat_deleted' | 'typing' | 'chat_updated' | 'pins_updated' | 'user_online' | 'user_offline';
+  type: 'new_message' | 'message_deleted' | 'message_edited' | 'member_added' | 'member_removed' | 'member_left' | 'chat_deleted' | 'typing' | 'chat_updated' | 'pins_updated' | 'user_online' | 'user_offline' | 'read_state_updated';
   data: any;
 }
 
@@ -18,6 +18,7 @@ export const chatUpdatedEvent = writable<string | null>(null);
 export const typingEvent = writable<{ chatId: string; userId: string } | null>(null);
 export const pinsUpdatedEvent = writable<{ chatId: string; pinnedMessages: PinnedMessage[] } | null>(null);
 export const userPresenceEvent = writable<{ userId: string; isOnline: boolean } | null>(null);
+export const readStateEvent = writable<{ chatId: string; userId: string; lastReadAt: number } | null>(null);
 
 let eventSource: EventSource | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -173,6 +174,14 @@ function handleSSEEvent(event: SSEEvent) {
       userPresenceEvent.set({
         userId: event.data.userId,
         isOnline: false
+      });
+      break;
+    }
+    case 'read_state_updated': {
+      readStateEvent.set({
+        chatId: event.data.chatId,
+        userId: event.data.userId,
+        lastReadAt: event.data.lastReadAt
       });
       break;
     }

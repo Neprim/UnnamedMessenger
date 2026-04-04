@@ -26,9 +26,16 @@ function createChatsStore() {
 
   const getAll = () => get({ subscribe });
   const findChat = (chatId: string) => getAll().find((chat) => chat.id === chatId) ?? null;
+  const getChatSortTimestamp = (chat: Chat) => {
+    const lastMessagePreviewTimestamp = chat.lastMessage?.timestamp ?? 0;
+    const lastMessageTimestamp = chat.messages?.[chat.messages.length - 1]?.timestamp ?? 0;
+    return lastMessagePreviewTimestamp || lastMessageTimestamp || chat.createdAt || 0;
+  };
+  const sortChats = (chatList: Chat[]) =>
+    [...chatList].sort((left, right) => getChatSortTimestamp(right) - getChatSortTimestamp(left));
 
   const updateChatById = (chatId: string, updates: Partial<Chat>) => {
-    update((chatList) => chatList.map((chat) => (chat.id === chatId ? { ...chat, ...updates } : chat)));
+    update((chatList) => sortChats(chatList.map((chat) => (chat.id === chatId ? { ...chat, ...updates } : chat))));
   };
 
   const clearUnreadMarkerIfResolved = (chatId: string) => {
@@ -73,10 +80,10 @@ function createChatsStore() {
     update((chatList) => {
       const existingIndex = chatList.findIndex((chat) => chat.id === nextChat.id);
       if (existingIndex === -1) {
-        return [...chatList, nextChat];
+        return sortChats([...chatList, nextChat]);
       }
 
-      return chatList.map((chat) => (chat.id === nextChat.id ? { ...chat, ...nextChat } : chat));
+      return sortChats(chatList.map((chat) => (chat.id === nextChat.id ? { ...chat, ...nextChat } : chat)));
     });
   };
 
@@ -164,7 +171,7 @@ function createChatsStore() {
 
   const mergeMessages = (chatId: string, newMessages: Message[], prepend = false) => {
     update((chatList) =>
-      chatList.map((chat) => {
+      sortChats(chatList.map((chat) => {
         if (chat.id !== chatId) return chat;
 
         const existingMessages = chat.messages ?? [];
@@ -179,7 +186,7 @@ function createChatsStore() {
           messages,
           lastMessage: buildLastMessage(messages, chat.members ?? [])
         };
-      })
+      }))
     );
   };
 
@@ -462,7 +469,7 @@ function createChatsStore() {
         })
       );
 
-      set(loadedChats);
+      set(sortChats(loadedChats));
       return loadedChats;
     },
     ensureChatLoaded,
@@ -497,12 +504,58 @@ function createChatsStore() {
       return findChat(chatId);
     },
     markChatAsRead: async (chatId: string) => {
-      await api.chats.markAsRead(chatId);
-      updateChatById(chatId, { unreadCount: 0, firstUnreadId: null });
+      const authState = getRequiredAuth();
+      const result = await api.chats.markAsRead(chatId);
+      update((chatList) =>
+        chatList.map((chat) => {
+          if (chat.id !== chatId) return chat;
+
+          return {
+            ...chat,
+            unreadCount: 0,
+            firstUnreadId: null,
+            members: (chat.members ?? []).map((member) =>
+              member.id === authState.user?.id
+                ? {
+                    ...member,
+                    lastReadAt: result.lastReadAt
+                  }
+                : member
+            )
+          };
+        })
+      );
     },
-    finalizeClosedChat: (chatId: string) => {
+    setChatReadState: async (chatId: string, lastReadAt: number) => {
+      const authState = getRequiredAuth();
+      const result = await api.chats.markAsRead(chatId, lastReadAt);
+      update((chatList) =>
+        chatList.map((chat) => {
+          if (chat.id !== chatId) return chat;
+
+          const messages = chat.messages ?? [];
+          const unreadMessages = messages.filter((message) => !isSystemMessage(message) && message.timestamp > result.lastReadAt);
+          return {
+            ...chat,
+            unreadCount: unreadMessages.length,
+            firstUnreadId: unreadMessages[0]?.id ?? null,
+            unreadMarkerId: unreadMessages[0]?.id ?? null,
+            members: (chat.members ?? []).map((member) =>
+              member.id === authState.user?.id
+                ? {
+                    ...member,
+                    lastReadAt: result.lastReadAt
+                  }
+                : member
+            )
+          };
+        })
+      );
+    },
+    clearUnreadMarkerOnOpen: (chatId: string) => {
       clearUnreadMarkerIfResolved(chatId);
     },
+    finalizeClosedChat: (_chatId: string) => {},
     sendMessage: async (
       chatId: string,
       content: string,
@@ -541,7 +594,7 @@ function createChatsStore() {
 
       mergeMessages(chatId, [nextMessage], false);
       update((chatList) =>
-        chatList.map((item) => {
+        sortChats(chatList.map((item) => {
           if (item.id !== chatId) return item;
 
           const messages = item.messages ?? [];
@@ -561,7 +614,7 @@ function createChatsStore() {
                   }
                 : lastMessage
           };
-        })
+        }))
       );
       return nextMessage;
     },
@@ -593,7 +646,7 @@ function createChatsStore() {
       );
 
       update((chatList) =>
-        chatList.map((item) => {
+        sortChats(chatList.map((item) => {
           if (item.id !== chatId) return item;
 
           const baseMessages = (item.messages ?? []).map((message) =>
@@ -613,7 +666,7 @@ function createChatsStore() {
             pinnedMessages: synced.pinnedMessages,
             lastMessage: buildLastMessage(synced.messages, item.members ?? [])
           };
-        })
+        }))
       );
 
       return updatedMessage;
@@ -913,6 +966,25 @@ function createChatsStore() {
         })
       );
     },
+    handleReadStateEvent: (chatId: string, userId: string, lastReadAt: number) => {
+      update((chatList) =>
+        chatList.map((chat) => {
+          if (chat.id !== chatId) return chat;
+
+          return {
+            ...chat,
+            members: (chat.members ?? []).map((member) =>
+              member.id === userId
+                ? {
+                    ...member,
+                    lastReadAt
+                  }
+                : member
+            )
+          };
+        })
+      );
+    },
     applyIncomingEvent: async (chatId: string, incomingMessage: Message, activeChatId: string | null) => {
       const authState = getRequiredAuth();
       const existingChat = findChat(chatId);
@@ -1007,15 +1079,18 @@ function createChatsStore() {
           : [];
 
       const isOwnMessage = incomingMessage.senderId === authState.user?.id;
+      const canAutoReadActiveChat =
+        isActiveChat &&
+        (typeof document === 'undefined' || (document.visibilityState === 'visible' && document.hasFocus()));
 
       update((chatList) =>
-        chatList.map((item) => {
+        sortChats(chatList.map((item) => {
           if (item.id !== chatId) return item;
 
           const existingIds = new Set((item.messages ?? []).map((message) => message.id));
           const messages = existingIds.has(nextMessage.id) ? item.messages ?? [] : [...(item.messages ?? []), nextMessage];
           const previousUnreadCount = item.unreadCount ?? 0;
-          const nextUnreadCount = isActiveChat || isOwnMessage ? previousUnreadCount : previousUnreadCount + 1;
+          const nextUnreadCount = canAutoReadActiveChat || isOwnMessage ? previousUnreadCount : previousUnreadCount + 1;
           const unreadMarkerId = isOwnMessage
             ? null
             : nextUnreadCount > 0
@@ -1035,6 +1110,7 @@ function createChatsStore() {
                       senderId: nextMessage.senderId,
                       senderUsername: nextMessage.senderUsername,
                       content: '',
+                      timestamp: nextMessage.timestamp,
                       isSystem: false,
                       hasAttachments: true
                     }),
@@ -1043,7 +1119,7 @@ function createChatsStore() {
                   }
                 : buildLastMessage(messages, item.members ?? [])
           };
-        })
+        }))
       );
     }
   };

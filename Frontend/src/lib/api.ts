@@ -207,8 +207,11 @@ export const api = {
       return request<ChatMessagesResponse>(url);
     },
     
-    markAsRead: (chatId: string) =>
-      request<{ success: boolean; lastReadAt: number }>(`/chats/${chatId}/read`, { method: 'PATCH' }),
+    markAsRead: (chatId: string, lastReadAt?: number) =>
+      request<{ success: boolean; lastReadAt: number }>(`/chats/${chatId}/read`, {
+        method: 'PATCH',
+        body: JSON.stringify(lastReadAt !== undefined ? { lastReadAt } : {})
+      }),
 
     sendTyping: (chatId: string) =>
       request<{ success: boolean }>(`/chats/${chatId}/typing`, { method: 'POST' }),

@@ -20,6 +20,7 @@ export interface ChatMember {
 export interface LastMessage {
   senderId: string | null;
   content: string;
+  timestamp: number;
   senderUsername?: string;
   isSystem: boolean;
   hasAttachments?: boolean;

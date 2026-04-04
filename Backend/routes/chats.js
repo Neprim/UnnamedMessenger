@@ -225,7 +225,7 @@ router.post('/', authenticate, (req, res) => {
     createSystemMessage(chatId, 'chat_created', {});
     
     members = db.prepare(`
-      SELECT u.id, u.username, u.avatar_updated_at, cm.encrypted_chat_key
+      SELECT u.id, u.username, u.avatar_updated_at, cm.encrypted_chat_key, cm.last_read_at
       FROM chat_members cm
       JOIN users u ON cm.user_id = u.id
       WHERE cm.chat_id = ?
@@ -244,6 +244,7 @@ router.post('/', authenticate, (req, res) => {
         username: m.username,
         avatarUrl: getAvatarUrl(m.id, m.avatar_updated_at),
         encryptedKey: m.encrypted_chat_key,
+        lastReadAt: m.last_read_at,
         isOnline: sse.isUserOnline(m.id)
       })),
       pinnedMessages: []
@@ -274,7 +275,7 @@ router.get('/:chatId', authenticate, (req, res) => {
     }
     
     const members = db.prepare(`
-      SELECT u.id, u.username, u.avatar_updated_at, cm.encrypted_chat_key
+      SELECT u.id, u.username, u.avatar_updated_at, cm.encrypted_chat_key, cm.last_read_at
       FROM chat_members cm
       JOIN users u ON cm.user_id = u.id
       WHERE cm.chat_id = ?
@@ -293,6 +294,7 @@ router.get('/:chatId', authenticate, (req, res) => {
         username: m.username,
         avatarUrl: getAvatarUrl(m.id, m.avatar_updated_at),
         encryptedKey: m.encrypted_chat_key,
+        lastReadAt: m.last_read_at,
         isOnline: sse.isUserOnline(m.id)
       })),
       pinnedMessages: getPinnedMessages(chat.id)
@@ -953,10 +955,20 @@ router.patch('/:chatId/read', authenticate, (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
     
+    const requestedLastReadAt = Number(req.body?.lastReadAt ?? NaN);
     const lastMessage = db.prepare('SELECT MAX(timestamp) as max FROM messages WHERE chat_id = ?').get(req.params.chatId);
-    const lastReadAt = lastMessage.max || 0;
+    const maxLastReadAt = lastMessage.max || 0;
+    const lastReadAt = Number.isFinite(requestedLastReadAt)
+      ? Math.max(0, Math.min(requestedLastReadAt, maxLastReadAt))
+      : maxLastReadAt;
     
     db.prepare('UPDATE chat_members SET last_read_at = ? WHERE chat_id = ? AND user_id = ?').run(lastReadAt, req.params.chatId, req.userId);
+
+    broadcastToChatMembers(req.params.chatId, 'read_state_updated', {
+      chatId: req.params.chatId,
+      userId: req.userId,
+      lastReadAt
+    }, req.userId);
     
     res.json({ success: true, lastReadAt });
   } catch (err) {

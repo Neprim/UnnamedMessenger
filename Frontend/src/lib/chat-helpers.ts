@@ -172,6 +172,7 @@ export function buildLastMessage(messages: Message[], members: ChatMember[] = []
     return {
       senderId: null,
       content: getSystemMessageContent(parseSystemMessage(lastMessage.content)),
+      timestamp: lastMessage.timestamp,
       isSystem: true
     };
   }
@@ -181,6 +182,7 @@ export function buildLastMessage(messages: Message[], members: ChatMember[] = []
   return {
     senderId: lastMessage.senderId,
     content: lastMessage.content,
+    timestamp: lastMessage.timestamp,
     senderUsername: lastMessage.senderUsername ?? sender?.username ?? 'Unknown',
     isSystem: false,
     hasAttachments: Array.isArray(lastMessage.fileIds) && lastMessage.fileIds.length > 0
