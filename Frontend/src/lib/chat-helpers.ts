@@ -34,13 +34,20 @@ export function getMemberMap(members: ChatMember[] = []): Map<string, string> {
 export function getOtherUser(
   chat: Pick<Chat, 'type' | 'members'>,
   currentUserId?: string
-): { id: string; username: string; avatarUrl?: string | null } | null {
+): { id: string; username: string; avatarUrl?: string | null; isOnline?: boolean } | null {
   if (chat.type !== 'pm' || !chat.members) {
     return null;
   }
 
   const otherMember = chat.members.find((member) => member.id !== currentUserId);
-  return otherMember ? { id: otherMember.id, username: otherMember.username, avatarUrl: otherMember.avatarUrl } : null;
+  return otherMember
+    ? {
+        id: otherMember.id,
+        username: otherMember.username,
+        avatarUrl: otherMember.avatarUrl,
+        isOnline: otherMember.isOnline
+      }
+    : null;
 }
 
 export function isPersonalChatWithUser(chat: Chat, userId: string): boolean {

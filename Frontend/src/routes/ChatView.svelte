@@ -11,10 +11,12 @@
   import ChatAttachmentBrowserModal from '../components/chat/ChatAttachmentBrowserModal.svelte';
   import ChatImageCarouselModal from '../components/chat/ChatImageCarouselModal.svelte';
   import PinnedMessagesModal from '../components/chat/PinnedMessagesModal.svelte';
+  import ChatExportModal from '../components/chat/ChatExportModal.svelte';
   import MembersModal from '../components/chat/MembersModal.svelte';
   import AvatarCropModal from '../components/settings/AvatarCropModal.svelte';
   import { getFavoriteChatImageIds, toggleFavoriteChatImage } from '../lib/chat-image-favorites';
-  import { formatFileSize, isSystemMessage, parseFileMetadataJson } from '../lib/chat-helpers';
+  import { createZipBlob } from '../lib/zip';
+  import { decryptMessagesForDisplay, formatFileSize, getSystemMessageContent, isSystemMessage, parseFileMetadataJson, parseSystemMessage } from '../lib/chat-helpers';
   import type { ChatFileMetadata, ChatMember, Message, SearchUserResult } from '../lib/types';
 
   export let params: { id: string };
@@ -36,6 +38,7 @@
   let showAttachmentBrowserModal = false;
   let showImageCarouselModal = false;
   let showPinnedMessagesModal = false;
+  let showExportModal = false;
   let showLeaveChatModal = false;
   let showRemoveMemberModal = false;
   let showDeleteMessageModal = false;
@@ -52,6 +55,7 @@
   let dragDepth = 0;
   let loadingImageLibrary = false;
   let loadingAttachmentBrowser = false;
+  let exportingHistory = false;
   let imageLibraryItems: Array<{
     fileId: string;
     previewUrl: string | null;
@@ -81,6 +85,11 @@
   let leaveDeleteFiles = false;
   let removeDeleteMessages = false;
   let removeDeleteFiles = false;
+  let exportFromDate = '';
+  let exportToDate = '';
+  let exportIncludeImages = true;
+  let exportIncludeDocuments = true;
+  let exportIncludeMedia = true;
   let contextMenu: { x: number; y: number; messageId: string; senderId: string | null; visible: boolean } = {
     x: 0,
     y: 0,
@@ -131,6 +140,7 @@
   const ERROR_TOAST_DURATION_MS = 4000;
   const MAX_ATTACHMENTS_PER_MESSAGE = 10;
   const MAX_MESSAGE_LENGTH = 8000;
+  const EXPORT_MESSAGES_PAGE_SIZE = 100;
 
   $: selectedChat = $chats.find((chat) => chat.id === params.id) ?? chatDetail;
   $: messages = selectedChat?.messages ?? [];
@@ -139,6 +149,13 @@
   $: chatDisplayName =
     selectedChat?.type === 'pm' && otherUserName ? otherUserName : selectedChat?.name || 'Чат';
   $: chatDisplayAvatarUrl = selectedChat?.type === 'pm' ? selectedChat?.otherUser?.avatarUrl ?? null : selectedChat?.avatarUrl ?? null;
+  $: chatPresenceLabel =
+    selectedChat?.type === 'pm'
+      ? selectedChat?.otherUser?.isOnline
+        ? 'в сети'
+        : 'не в сети'
+      : '';
+  $: onlineMembersCount = (selectedChat?.members ?? []).filter((member) => member.isOnline).length;
   $: canAddMembers = Boolean(isCreator && selectedChat?.type === 'gm');
   $: isCreator = selectedChat?.createdBy === $auth.user?.id;
   $: isOwnMessage = contextMenu.senderId === $auth.user?.id;
@@ -927,6 +944,238 @@
     };
 
     return nextDecrypted;
+  }
+
+  function escapeHtml(value: string) {
+    return value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function toExportTimestamp(value: string, endOfRange = false) {
+    if (!value) {
+      return null;
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    if (endOfRange && !value.includes('T')) {
+      date.setHours(23, 59, 59, 999);
+    }
+
+    return Math.floor(date.getTime() / 1000);
+  }
+
+  function getExportFileKind(type: string | undefined) {
+    if (!type) {
+      return 'documents';
+    }
+
+    if (type.startsWith('image/')) {
+      return 'images';
+    }
+
+    if (type.startsWith('audio/') || type.startsWith('video/')) {
+      return 'media';
+    }
+
+    return 'documents';
+  }
+
+  function shouldIncludeExportFile(metadata: ChatFileMetadata) {
+    const kind = getExportFileKind(metadata.type);
+    return (
+      (kind === 'images' && exportIncludeImages) ||
+      (kind === 'documents' && exportIncludeDocuments) ||
+      (kind === 'media' && exportIncludeMedia)
+    );
+  }
+
+  function sanitizeExportFileName(fileId: string, fileName: string) {
+    const normalized = fileName.trim() || 'file';
+    const safeName = normalized.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+    return `${fileId} - ${safeName}`;
+  }
+
+  async function loadMessagesForExport(chatId: string, currentChatKey: CryptoKey) {
+    let cursor: string | undefined;
+    let hasMore = true;
+    let allMessages: Message[] = [];
+
+    while (hasMore) {
+      const batch = await api.chats.getMessages(chatId, {
+        limit: EXPORT_MESSAGES_PAGE_SIZE,
+        cursor
+      });
+      const decryptedBatch = await decryptMessagesForDisplay(
+        batch.messages,
+        currentChatKey,
+        selectedChat?.members ?? []
+      );
+
+      if (decryptedBatch.length === 0) {
+        break;
+      }
+
+      allMessages = cursor ? [...decryptedBatch, ...allMessages] : decryptedBatch;
+      hasMore = batch.hasMoreAfter;
+      cursor = decryptedBatch[0]?.id;
+
+      if (!cursor) {
+        break;
+      }
+    }
+
+    return allMessages;
+  }
+
+  function buildExportHtml(
+    chatName: string,
+    messagesForExport: Message[],
+    exportedFilesById: Record<string, { fileName: string; metadata: ChatFileMetadata }>
+  ) {
+    const messageHtml = messagesForExport
+      .map((message) => {
+        const timeLabel = new Date(message.timestamp * 1000).toLocaleString();
+        const authorLabel = escapeHtml(message.senderUsername || 'Система');
+
+        if (isSystemMessage(message)) {
+          const systemText = escapeHtml(getSystemMessageContent(parseSystemMessage(message.content || '')));
+          return `<article class="message system"><div class="meta">${timeLabel}</div><div class="content">${systemText}</div></article>`;
+        }
+
+        const textHtml = message.content
+          ? `<div class="content">${escapeHtml(message.content).replaceAll('\n', '<br>')}</div>`
+          : '';
+
+        const attachmentsHtml = message.fileIds.length
+          ? `<ul class="attachments">${message.fileIds
+              .map((fileId) => {
+                const exported = exportedFilesById[fileId];
+                const displayName = escapeHtml(
+                  exported?.metadata.name ||
+                    fileDisplayById[fileId]?.name ||
+                    'Вложение'
+                );
+                return exported
+                  ? `<li><a href="files/${encodeURIComponent(exported.fileName)}" download="${escapeHtml(exported.fileName)}">${displayName}</a></li>`
+                  : `<li><span>${displayName}</span></li>`;
+              })
+              .join('')}</ul>`
+          : '';
+
+        return `<article class="message"><div class="meta"><strong>${authorLabel}</strong> · ${timeLabel}</div>${textHtml}${attachmentsHtml}</article>`;
+      })
+      .join('');
+
+    return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(chatName)}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 24px; background: #f8fafc; color: #0f172a; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    .subtitle { margin: 0 0 24px; color: #64748b; }
+    .message { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px 16px; margin-bottom: 12px; }
+    .message.system { background: #eff6ff; color: #1e3a8a; }
+    .meta { font-size: 12px; color: #64748b; margin-bottom: 8px; }
+    .content { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
+    .attachments { margin: 10px 0 0; padding-left: 18px; }
+    .attachments li + li { margin-top: 4px; }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(chatName)}</h1>
+  <p class="subtitle">Экспорт истории чата</p>
+  ${messageHtml || '<p>Сообщения за выбранный период не найдены.</p>'}
+</body>
+</html>`;
+  }
+
+  async function handleExportHistory() {
+    if (!selectedChat?.id || !chatKey || exportingHistory) {
+      return;
+    }
+
+    const fromTimestamp = toExportTimestamp(exportFromDate);
+    const toTimestamp = toExportTimestamp(exportToDate, true);
+
+    if (fromTimestamp && toTimestamp && fromTimestamp > toTimestamp) {
+      error = 'Начальная дата не может быть позже конечной';
+      return;
+    }
+
+    exportingHistory = true;
+    try {
+      const allMessages = await loadMessagesForExport(selectedChat.id, chatKey);
+      const filteredMessages = allMessages.filter((message) => {
+        if (fromTimestamp && message.timestamp < fromTimestamp) return false;
+        if (toTimestamp && message.timestamp > toTimestamp) return false;
+        return true;
+      });
+
+      const metadataById = await ensureAllChatMetadataDecrypted(selectedChat.id, chatKey);
+      const fileIdsToExport = Array.from(
+        new Set(
+          filteredMessages.flatMap((message) =>
+            message.fileIds.filter((fileId) => {
+              const metadata = metadataById[fileId];
+              return Boolean(metadata && shouldIncludeExportFile(metadata));
+            })
+          )
+        )
+      );
+
+      const zipEntries: Array<{ name: string; data: Uint8Array }> = [];
+      const exportedFilesById: Record<string, { fileName: string; metadata: ChatFileMetadata }> = {};
+
+      for (const fileId of fileIdsToExport) {
+        const metadata = metadataById[fileId];
+        if (!metadata) continue;
+
+        const contentResponse = await api.files.downloadChatFileContent(selectedChat.id, fileId);
+        const decryptedContent = await cryptoLib.decryptBinary(chatKey, contentResponse.content);
+        const fileName = sanitizeExportFileName(fileId, metadata.name);
+
+        exportedFilesById[fileId] = { fileName, metadata };
+        zipEntries.push({
+          name: `files/${fileName}`,
+          data: Uint8Array.from(decryptedContent)
+        });
+      }
+
+      const html = buildExportHtml(chatDisplayName, filteredMessages, exportedFilesById);
+      zipEntries.unshift({
+        name: 'index.html',
+        data: new TextEncoder().encode(html)
+      });
+
+      const archive = createZipBlob(zipEntries);
+      const archiveName = `${(chatDisplayName || 'chat').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')}-export.zip`;
+      const objectUrl = URL.createObjectURL(archive);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = archiveName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+      showExportModal = false;
+    } catch (exception) {
+      error = exception instanceof Error ? exception.message : 'Не удалось экспортировать историю чата';
+    } finally {
+      exportingHistory = false;
+    }
   }
 
   function getAttachmentKind(type: string) {
@@ -1925,10 +2174,23 @@
       aria-label="Открыть информацию о чате"
     >
       <div class="chat-header-text">
+        <div class="chat-header-title-row">
           <h2>{chatDisplayName}</h2>
+          {#if selectedChat?.type === 'pm' && chatPresenceLabel}
+            <span class="chat-header-status" class:online={selectedChat?.otherUser?.isOnline}>
+              <span class="status-dot"></span>
+              <span>{chatPresenceLabel}</span>
+            </span>
+          {:else if selectedChat?.type === 'gm'}
+            <span class="chat-header-status" class:online={onlineMembersCount > 0}>
+              <span class="status-dot"></span>
+              <span>{onlineMembersCount} в сети</span>
+            </span>
+          {/if}
         </div>
-      </button>
-    </div>
+      </div>
+    </button>
+  </div>
 
     {#if currentPinnedMessage}
       <div class="pinned-bar">
@@ -2222,8 +2484,29 @@
       showMembersModal = false;
       showRenameChatModal = true;
     }}
+    on:exporthistory={() => {
+      showMembersModal = false;
+      showExportModal = true;
+    }}
     on:openattachments={(event) => openAttachmentBrowser(event.detail.kind)}
     on:remove={(event) => removeMember(event.detail.userId)}
+  />
+{/if}
+
+{#if showExportModal}
+  <ChatExportModal
+    bind:fromDate={exportFromDate}
+    bind:toDate={exportToDate}
+    bind:includeImages={exportIncludeImages}
+    bind:includeDocuments={exportIncludeDocuments}
+    bind:includeMedia={exportIncludeMedia}
+    exporting={exportingHistory}
+    on:close={() => {
+      if (!exportingHistory) {
+        showExportModal = false;
+      }
+    }}
+    on:submit={handleExportHistory}
   />
 {/if}
 
@@ -2433,6 +2716,15 @@
   }
 
   .chat-header-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .chat-header-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     min-width: 0;
   }
 
@@ -2440,10 +2732,37 @@
     margin: 0;
     font-size: 17px;
     font-weight: 600;
+    min-width: 0;
   }
 
   .chat-header-btn:hover h2 {
     color: #2563eb;
+  }
+
+  .chat-header-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    font-size: 12px;
+    line-height: 1.2;
+    color: #64748b;
+  }
+
+  .chat-header-status.online {
+    color: #16a34a;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #dc2626;
+    flex: none;
+  }
+
+  .chat-header-status.online .status-dot {
+    background: #16a34a;
   }
 
   .pinned-bar {
@@ -2830,6 +3149,10 @@
 
     .chat-header-btn {
       padding: 13px 0;
+    }
+
+    .chat-header-title-row {
+      gap: 8px;
     }
 
     h2 {

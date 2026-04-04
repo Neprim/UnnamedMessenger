@@ -1,18 +1,55 @@
+const db = require('./db');
+
 const clients = new Map();
 
+function isUserOnline(userId) {
+  return clients.has(userId) && clients.get(userId).size > 0;
+}
+
+function getRelatedUserIds(userId) {
+  return db.prepare(`
+    SELECT DISTINCT cm.user_id
+    FROM chat_members own
+    JOIN chat_members cm ON cm.chat_id = own.chat_id
+    WHERE own.user_id = ? AND cm.user_id != ?
+  `).all(userId, userId).map((row) => row.user_id);
+}
+
+function notifyPresenceChange(userId, isOnline) {
+  const event = {
+    type: isOnline ? 'user_online' : 'user_offline',
+    data: { userId }
+  };
+
+  getRelatedUserIds(userId).forEach((relatedUserId) => {
+    if (isUserOnline(relatedUserId)) {
+      broadcast(relatedUserId, event);
+    }
+  });
+}
+
 function subscribe(userId, res) {
+  const becameOnline = !isUserOnline(userId);
   if (!clients.has(userId)) {
     clients.set(userId, new Set());
   }
   clients.get(userId).add(res);
+  if (becameOnline) {
+    notifyPresenceChange(userId, true);
+  }
 }
 
 function unsubscribe(userId, res) {
+  let becameOffline = false;
   if (clients.has(userId)) {
     clients.get(userId).delete(res);
     if (clients.get(userId).size === 0) {
       clients.delete(userId);
+      becameOffline = true;
     }
+  }
+  if (becameOffline) {
+    notifyPresenceChange(userId, false);
   }
 }
 
@@ -37,5 +74,6 @@ module.exports = {
   subscribe,
   unsubscribe,
   broadcast,
-  broadcastToChat
+  broadcastToChat,
+  isUserOnline
 };

@@ -875,6 +875,44 @@ function createChatsStore() {
         })
       );
     },
+    handlePresenceEvent: (userId: string, isOnline: boolean) => {
+      update((chatList) =>
+        chatList.map((chat) => {
+          let changed = false;
+          const members = (chat.members ?? []).map((member) => {
+            if (member.id !== userId || member.isOnline === isOnline) {
+              return member;
+            }
+
+            changed = true;
+            return {
+              ...member,
+              isOnline
+            };
+          });
+
+          const otherUser =
+            chat.otherUser?.id === userId && chat.otherUser.isOnline !== isOnline
+              ? {
+                  ...chat.otherUser,
+                  isOnline
+                }
+              : chat.otherUser;
+
+          if (otherUser !== chat.otherUser) {
+            changed = true;
+          }
+
+          return changed
+            ? {
+                ...chat,
+                members,
+                otherUser
+              }
+            : chat;
+        })
+      );
+    },
     applyIncomingEvent: async (chatId: string, incomingMessage: Message, activeChatId: string | null) => {
       const authState = getRequiredAuth();
       const existingChat = findChat(chatId);

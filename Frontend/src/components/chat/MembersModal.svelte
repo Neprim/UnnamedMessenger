@@ -24,6 +24,7 @@
     addMember: void;
     editAvatar: void;
     editName: void;
+    exporthistory: void;
     openattachments: { kind: 'images' | 'documents' | 'media' };
   }>();
 
@@ -114,6 +115,13 @@
               <Avatar name={member.username} src={member.avatarUrl} size={40} />
               <div class="member-meta">
                 <span class="member-name">{member.username}</span>
+                <span class="member-role member-role-online">
+                  <span class="member-status-dot" class:online={member.isOnline}></span>
+                  <span>{member.isOnline ? 'В сети' : 'Не в сети'}</span>
+                  <span>·</span>
+                  <span>{member.id === currentUserId ? 'Вы' : 'Участник'}</span>
+                </span>
+                <span class="member-role">{member.isOnline ? 'В сети' : 'Не в сети'}</span>
                 <span class="member-role">{member.id === currentUserId ? 'Вы' : 'Участник'}</span>
               </div>
             </div>
@@ -134,6 +142,7 @@
       </div>
 
       <div class="action-list">
+        <button class="secondary-action" type="button" on:click={() => dispatch('exporthistory')}>Экспортировать историю</button>
         {#if chatType === 'gm' && !isCreator}
           <button class="secondary-action" type="button" on:click={() => dispatch('leaveChat')}>Покинуть чат</button>
         {/if}
@@ -394,6 +403,29 @@
   .member-role {
     font-size: 12px;
     color: #94a3b8;
+  }
+
+  .member-role-online {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .member-meta > .member-role:not(.member-role-online) {
+    display: none;
+  }
+
+  .member-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #dc2626;
+    flex: none;
+  }
+
+  .member-status-dot.online {
+    background: #16a34a;
   }
 
   .remove-btn {

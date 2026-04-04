@@ -2,7 +2,7 @@ import { writable } from 'svelte/store';
 import type { Message, PinnedMessage } from './types';
 
 export interface SSEEvent {
-  type: 'new_message' | 'message_deleted' | 'message_edited' | 'member_added' | 'member_removed' | 'member_left' | 'chat_deleted' | 'typing' | 'chat_updated' | 'pins_updated';
+  type: 'new_message' | 'message_deleted' | 'message_edited' | 'member_added' | 'member_removed' | 'member_left' | 'chat_deleted' | 'typing' | 'chat_updated' | 'pins_updated' | 'user_online' | 'user_offline';
   data: any;
 }
 
@@ -17,11 +17,24 @@ export const chatDeletedEvent = writable<string | null>(null);
 export const chatUpdatedEvent = writable<string | null>(null);
 export const typingEvent = writable<{ chatId: string; userId: string } | null>(null);
 export const pinsUpdatedEvent = writable<{ chatId: string; pinnedMessages: PinnedMessage[] } | null>(null);
+export const userPresenceEvent = writable<{ userId: string; isOnline: boolean } | null>(null);
 
 let eventSource: EventSource | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleReconnect() {
+  if (reconnectTimer) {
+    return;
+  }
+
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectSSE();
+  }, 5000);
+}
 
 export function connectSSE() {
-  if (eventSource) return;
+  if (eventSource && eventSource.readyState !== EventSource.CLOSED) return;
 
   const token = sessionStorage.getItem('token');
   if (!token) {
@@ -46,14 +59,35 @@ export function connectSSE() {
       eventSource.close();
       eventSource = null;
     }
-    setTimeout(connectSSE, 5000);
+    scheduleReconnect();
   };
 }
 
 export function disconnectSSE() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   if (eventSource) {
     eventSource.close();
     eventSource = null;
+  }
+}
+
+export function isSSEConnected() {
+  return Boolean(eventSource && eventSource.readyState === EventSource.OPEN);
+}
+
+export function ensureSSEConnection() {
+  if (!eventSource) {
+    connectSSE();
+    return;
+  }
+
+  if (eventSource.readyState !== EventSource.OPEN) {
+    eventSource.close();
+    eventSource = null;
+    connectSSE();
   }
 }
 
@@ -125,6 +159,20 @@ function handleSSEEvent(event: SSEEvent) {
       pinsUpdatedEvent.set({
         chatId: event.data.chatId,
         pinnedMessages: event.data.pinnedMessages ?? []
+      });
+      break;
+    }
+    case 'user_online': {
+      userPresenceEvent.set({
+        userId: event.data.userId,
+        isOnline: true
+      });
+      break;
+    }
+    case 'user_offline': {
+      userPresenceEvent.set({
+        userId: event.data.userId,
+        isOnline: false
       });
       break;
     }

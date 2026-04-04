@@ -243,7 +243,8 @@ router.post('/', authenticate, (req, res) => {
         id: m.id,
         username: m.username,
         avatarUrl: getAvatarUrl(m.id, m.avatar_updated_at),
-        encryptedKey: m.encrypted_chat_key
+        encryptedKey: m.encrypted_chat_key,
+        isOnline: sse.isUserOnline(m.id)
       })),
       pinnedMessages: []
     });
@@ -291,7 +292,8 @@ router.get('/:chatId', authenticate, (req, res) => {
         id: m.id,
         username: m.username,
         avatarUrl: getAvatarUrl(m.id, m.avatar_updated_at),
-        encryptedKey: m.encrypted_chat_key
+        encryptedKey: m.encrypted_chat_key,
+        isOnline: sse.isUserOnline(m.id)
       })),
       pinnedMessages: getPinnedMessages(chat.id)
     });

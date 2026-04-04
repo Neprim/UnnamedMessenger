@@ -14,6 +14,7 @@ export interface ChatMember {
   avatarUrl?: string | null;
   encryptedKey?: string;
   lastReadAt?: number;
+  isOnline?: boolean;
 }
 
 export interface LastMessage {
@@ -85,6 +86,7 @@ export interface Chat {
     id: string;
     username: string;
     avatarUrl?: string | null;
+    isOnline?: boolean;
   } | null;
   unreadCount?: number;
   firstUnreadId?: string | null;

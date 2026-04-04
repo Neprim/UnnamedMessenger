@@ -2,7 +2,7 @@
   import Router, { push } from 'svelte-spa-router';
   import { onDestroy, onMount } from 'svelte';
   import { auth, chats } from './lib/stores';
-  import { connectSSE, disconnectSSE } from './lib/sse';
+  import { connectSSE, disconnectSSE, ensureSSEConnection, isSSEConnected } from './lib/sse';
 
   import Register from './routes/Register.svelte';
   import Login from './routes/Login.svelte';
@@ -18,6 +18,7 @@
 
   let unsubscribe: (() => void) | undefined;
   let lastFaviconState: 'unread' | 'idle' | null = null;
+  let sseWatchdog: ReturnType<typeof setInterval> | undefined;
 
   function ensureFaviconLink() {
     let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
@@ -56,31 +57,58 @@
     updateFavicon($chats.some((chat) => (chat.unreadCount ?? 0) > 0));
   }
 
-  onMount(async () => {
-    await auth.loadFromStorage();
-
-    const hasPrivateKey = sessionStorage.getItem('privateKey') !== null;
-    const hasEncryptedKey = localStorage.getItem('encryptedPrivateKey') !== null;
-
-    if (hasPrivateKey) {
-      push('/chats');
-    } else if (hasEncryptedKey) {
-      push('/login');
-    } else {
-      push('/register');
-    }
-
-    unsubscribe = auth.subscribe((state) => {
-      if (state.isAuthenticated && state.privateKey) {
-        connectSSE();
-      } else {
-        disconnectSSE();
+  onMount(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        ensureSSEConnection();
       }
-    });
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    sseWatchdog = setInterval(() => {
+      const hasToken = sessionStorage.getItem('token') !== null;
+      const hasPrivateKey = sessionStorage.getItem('privateKey') !== null;
+      if (hasToken && hasPrivateKey && !isSSEConnected()) {
+        ensureSSEConnection();
+      }
+    }, 10000);
+
+    (async () => {
+      await auth.loadFromStorage();
+
+      const hasPrivateKey = sessionStorage.getItem('privateKey') !== null;
+      const hasEncryptedKey = localStorage.getItem('encryptedPrivateKey') !== null;
+
+      if (hasPrivateKey) {
+        push('/chats');
+      } else if (hasEncryptedKey) {
+        push('/login');
+      } else {
+        push('/register');
+      }
+
+      unsubscribe = auth.subscribe((state) => {
+        if (state.isAuthenticated && state.privateKey) {
+          connectSSE();
+        } else {
+          disconnectSSE();
+        }
+      });
+    })();
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (sseWatchdog) {
+        clearInterval(sseWatchdog);
+      }
+    };
   });
 
   onDestroy(() => {
     unsubscribe?.();
+    if (sseWatchdog) {
+      clearInterval(sseWatchdog);
+    }
     disconnectSSE();
   });
 </script>

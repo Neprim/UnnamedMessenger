@@ -3,7 +3,7 @@
   import { push } from 'svelte-spa-router';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
-  import { chatDeletedEvent, chatUpdatedEvent, deletedFilesEvent, memberEvent, sseMessage, typingEvent } from '../lib/sse';
+  import { chatDeletedEvent, chatUpdatedEvent, deletedFilesEvent, memberEvent, sseMessage, typingEvent, userPresenceEvent } from '../lib/sse';
   import * as crypto from '../lib/crypto';
   import ChatSidebar from '../components/chat/ChatSidebar.svelte';
   import CreateChatModal from '../components/chat/CreateChatModal.svelte';
@@ -92,6 +92,7 @@
   let unsubscribeTypingEvent: (() => void) | undefined;
   let unsubscribeDeletedFiles: (() => void) | undefined;
   let unsubscribeChatUpdated: (() => void) | undefined;
+  let unsubscribeUserPresence: (() => void) | undefined;
   let previousSelectedChatId: string | null = null;
 
   $: selectedChatId = params.id ?? null;
@@ -699,6 +700,12 @@
         chatUpdatedEvent.set(null);
       });
     });
+
+    unsubscribeUserPresence = userPresenceEvent.subscribe((event) => {
+      if (!event) return;
+      chats.handlePresenceEvent(event.userId, event.isOnline);
+      userPresenceEvent.set(null);
+    });
   });
 
   onDestroy(() => {
@@ -709,6 +716,7 @@
     unsubscribeTypingEvent?.();
     unsubscribeDeletedFiles?.();
     unsubscribeChatUpdated?.();
+    unsubscribeUserPresence?.();
   });
 </script>
 
