@@ -13,7 +13,7 @@
   import ProjectInfoModal from '../components/common/ProjectInfoModal.svelte';
   import ChatView from './ChatView.svelte';
   import { cacheFile, getCachedFile } from '../lib/file-cache';
-  import { formatFileSize, parseFileMetadataJson } from '../lib/chat-helpers';
+  import { formatFileSize, isPersonalChatWithUser, parseFileMetadataJson } from '../lib/chat-helpers';
   import type { ChatFileMetadata, SearchUserResult } from '../lib/types';
 
   export let params: { id?: string } = {};
@@ -28,6 +28,8 @@
   let showProjectInfoModal = false;
   let showAvatarModal = false;
   let showUserFilesModal = false;
+  let error = '';
+  let errorTimeout: ReturnType<typeof setTimeout> | null = null;
   let exportConfirmChecked = false;
   let exportingKey = false;
   let uploadingAvatar = false;
@@ -41,8 +43,14 @@
   let newChatName = '';
   let newChatType: 'pm' | 'gm' = 'gm';
   let creatingChat = false;
+  let creatingSidebarPm = false;
   let selectedChatId: string | null = null;
   let selectedChatDetail: Chat | null = null;
+  let sidebarSearch = '';
+  let sidebarUserResults: SearchUserResult[] = [];
+  let sidebarSearching = false;
+  let showSidebarUserModal = false;
+  let selectedSidebarUser: SearchUserResult | null = null;
 
   let userSearch = '';
   let searchResults: SearchUserResult[] = [];
@@ -106,6 +114,13 @@
     ...$chats.filter((chat) => pinnedChatIds.includes(chat.id)),
     ...$chats.filter((chat) => !pinnedChatIds.includes(chat.id))
   ];
+  $: normalizedSidebarSearch = sidebarSearch.trim().toLocaleLowerCase();
+  $: searchedChats = normalizedSidebarSearch
+    ? displayedChats.filter((chat) => {
+        const chatName = (chat.type === 'pm' ? chat.otherUser?.username : chat.name) ?? '';
+        return chatName.toLocaleLowerCase().includes(normalizedSidebarSearch);
+      })
+    : [];
   $: if (previousSelectedChatId !== selectedChatId) {
     if (previousSelectedChatId) {
       chats.finalizeClosedChat(previousSelectedChatId);
@@ -173,6 +188,39 @@
     selectedUserId = null;
   }
 
+  function clearError() {
+    error = '';
+    if (errorTimeout) {
+      clearTimeout(errorTimeout);
+      errorTimeout = null;
+    }
+  }
+
+  function showError(message: string) {
+    clearError();
+    error = message;
+    errorTimeout = setTimeout(() => {
+      error = '';
+      errorTimeout = null;
+    }, 4000);
+  }
+
+  function getBlockRelatedErrorMessage(exception: unknown, fallback: string) {
+    if (!(exception instanceof Error)) {
+      return fallback;
+    }
+
+    if (exception.message === 'This user blocked you') {
+      return 'Этот пользователь вас заблокировал, поэтому создать чат или пригласить его нельзя';
+    }
+
+    if (exception.message === 'You blocked this user') {
+      return 'Сначала разблокируйте пользователя, чтобы создать чат или пригласить его';
+    }
+
+    return exception.message || fallback;
+  }
+
   async function searchUsers() {
     if (!userSearch.trim()) {
       searchResults = [];
@@ -187,6 +235,128 @@
       searchResults = [];
     } finally {
       searching = false;
+    }
+  }
+
+  async function searchSidebarUsers(query: string) {
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) {
+      sidebarUserResults = [];
+      sidebarSearching = false;
+      return;
+    }
+
+    sidebarSearching = true;
+    try {
+      const results = await api.users.search(trimmedQuery);
+      if (sidebarSearch.trim() !== trimmedQuery) {
+        return;
+      }
+
+      sidebarUserResults = results.filter((user) => user.id !== $auth.user?.id);
+    } catch {
+      if (sidebarSearch.trim() === trimmedQuery) {
+        sidebarUserResults = [];
+      }
+    } finally {
+      if (sidebarSearch.trim() === trimmedQuery) {
+        sidebarSearching = false;
+      }
+    }
+  }
+
+  function handleSidebarSearchChange(event: CustomEvent<{ value: string }>) {
+    sidebarSearch = event.detail.value;
+
+    if (!sidebarSearch.trim()) {
+      sidebarUserResults = [];
+      sidebarSearching = false;
+      return;
+    }
+
+    searchSidebarUsers(sidebarSearch);
+  }
+
+  function clearSidebarSearch() {
+    sidebarSearch = '';
+    sidebarUserResults = [];
+    sidebarSearching = false;
+  }
+
+  function openSidebarUserModal(event: CustomEvent<{ user: SearchUserResult }>) {
+    selectedSidebarUser = event.detail.user;
+    showSidebarUserModal = true;
+  }
+
+  function getExistingPersonalChat(userId: string) {
+    return $chats.find((chat) => isPersonalChatWithUser(chat, userId)) ?? null;
+  }
+
+  async function handleOpenOrCreateSidebarPm() {
+    if (!selectedSidebarUser || creatingSidebarPm) {
+      return;
+    }
+
+    const sidebarUser = selectedSidebarUser;
+    const existingChat = $chats.find((chat) => isPersonalChatWithUser(chat, sidebarUser.id));
+    if (existingChat) {
+      showSidebarUserModal = false;
+      selectedSidebarUser = null;
+      clearSidebarSearch();
+      push(`/chats/${existingChat.id}`);
+      return;
+    }
+
+    creatingSidebarPm = true;
+    try {
+      const chat = await chats.createChat({
+        type: 'pm',
+        selectedUserId: sidebarUser.id,
+        selectedUserPublicKey: sidebarUser.publicKey
+      });
+
+      showSidebarUserModal = false;
+      selectedSidebarUser = null;
+      clearSidebarSearch();
+      push(`/chats/${chat.id}`);
+    } catch (exception) {
+      showError(getBlockRelatedErrorMessage(exception, 'Не удалось создать чат'));
+    } finally {
+      creatingSidebarPm = false;
+    }
+  }
+
+  async function handleToggleBlockUser(user: SearchUserResult) {
+    if (!$auth.user || !user?.id) {
+      return;
+    }
+
+    const isBlocked = ($auth.user.blockedUserIds ?? []).includes(user.id);
+    const warningText = isBlocked
+      ? `Разблокировать пользователя ${user.username}?\n\nПосле этого он снова сможет приглашать вас в чаты и создавать с вами личный чат.`
+      : `Заблокировать пользователя ${user.username}?\n\nПоследствия блокировки:\n- личный чат с ним будет удалён;\n- он больше не сможет приглашать вас в чаты и создавать с вами личный чат;\n- все его сообщения и вложения будут скрыты под спойлером до ручного открытия.`;
+
+    if (!window.confirm(warningText)) {
+      return;
+    }
+
+    try {
+      if (isBlocked) {
+        const result = await api.users.unblock(user.id);
+        auth.updateUser({ blockedUserIds: result.blockedUserIds });
+      } else {
+        const result = await api.users.block(user.id);
+        auth.updateUser({ blockedUserIds: result.blockedUserIds });
+
+        for (const deletedChatId of result.deletedChatIds) {
+          chats.handleChatDeleted(deletedChatId);
+          if (selectedChatId === deletedChatId) {
+            push('/chats');
+          }
+        }
+      }
+    } catch (exception) {
+      alert(exception instanceof Error ? exception.message : 'Не удалось обновить статус блокировки');
     }
   }
 
@@ -215,6 +385,8 @@
       showCreateModal = false;
       resetCreateState();
       push(`/chats/${chat.id}`);
+    } catch (exception) {
+      showError(getBlockRelatedErrorMessage(exception, 'Не удалось создать чат'));
     } finally {
       creatingChat = false;
     }
@@ -766,7 +938,7 @@
 
     unsubscribeUserPresence = userPresenceEvent.subscribe((event) => {
       if (!event) return;
-      chats.handlePresenceEvent(event.userId, event.isOnline);
+      chats.handlePresenceEvent(event.userId, event.isOnline, event.lastSeenAt ?? null);
       userPresenceEvent.set(null);
     });
 
@@ -792,15 +964,30 @@
 
 <div class="layout" class:chat-open={Boolean(selectedChatId)}>
   <input id="avatarInput" class="hidden-input" type="file" accept="image/jpeg,image/png,image/webp" on:change={handleAvatarFileChange} />
+  {#if error}
+    <div class="error-toast" role="alert" aria-live="assertive">
+      <span>{error}</span>
+      <button type="button" class="error-toast-close" on:click={clearError} aria-label="Закрыть ошибку">×</button>
+    </div>
+  {/if}
   <div class="sidebar-wrap">
     <ChatSidebar
       chats={displayedChats}
       {loading}
       {selectedChatId}
       {pinnedChatIds}
+      blockedUserIds={$auth.user?.blockedUserIds ?? []}
+      searchQuery={sidebarSearch}
+      {searchedChats}
+      searchedUsers={sidebarUserResults}
+      searchingUsers={sidebarSearching}
       on:create={() => (showCreateModal = true)}
       on:settings={() => (showSettingsModal = true)}
       on:togglepin={togglePinnedChat}
+      on:searchchange={handleSidebarSearchChange}
+      on:clearsearch={clearSidebarSearch}
+      on:openuser={openSidebarUserModal}
+      on:toggleblockuser={(event) => handleToggleBlockUser(event.detail.user)}
     />
   </div>
 
@@ -840,6 +1027,44 @@
       selectedUserId = event.detail.userId;
     }}
   />
+{/if}
+
+{#if showSidebarUserModal && selectedSidebarUser}
+  {@const existingChat = getExistingPersonalChat(selectedSidebarUser.id)}
+  <div class="modal-shell">
+    <button
+      class="modal-overlay"
+      type="button"
+      on:click={() => {
+        showSidebarUserModal = false;
+        selectedSidebarUser = null;
+      }}
+      aria-label="Закрыть окно"
+    ></button>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="sidebar-user-modal-title">
+      <h3 id="sidebar-user-modal-title">{existingChat ? 'Открыть личный чат' : 'Создать личный чат'}</h3>
+      <p class="modal-copy">
+        {existingChat
+          ? `Личный чат с пользователем ${selectedSidebarUser.username} уже существует.`
+          : `Создать личный чат с пользователем ${selectedSidebarUser.username}?`}
+      </p>
+      <div class="modal-actions">
+        <button
+          type="button"
+          on:click={() => {
+            showSidebarUserModal = false;
+            selectedSidebarUser = null;
+          }}
+          disabled={creatingSidebarPm}
+        >
+          Отмена
+        </button>
+        <button type="button" class="primary" on:click={handleOpenOrCreateSidebarPm} disabled={creatingSidebarPm}>
+          {creatingSidebarPm ? 'Загрузка...' : existingChat ? 'Открыть чат' : 'Создать чат'}
+        </button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 {#if showAvatarModal && pendingAvatarFile}
@@ -1421,6 +1646,32 @@
 
   .hidden-input {
     display: none;
+  }
+
+  .error-toast {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 160;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: min(420px, calc(100vw - 32px));
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(127, 29, 29, 0.96);
+    color: #fff;
+    box-shadow: 0 16px 40px rgba(15, 23, 42, 0.24);
+  }
+
+  .error-toast-close {
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0;
   }
 
   @media (max-width: 768px) {

@@ -86,6 +86,8 @@
   let leaveDeleteFiles = false;
   let removeDeleteMessages = false;
   let removeDeleteFiles = false;
+  let revealedBlockedMessageIds: string[] = [];
+  let revealedBlockedChatId: string | null = null;
   let exportFromDate = '';
   let exportToDate = '';
   let exportIncludeImages = true;
@@ -170,6 +172,7 @@
       : '';
   $: onlineMembersCount = (selectedChat?.members ?? []).filter((member) => member.isOnline).length;
   $: canAddMembers = Boolean(isCreator && selectedChat?.type === 'gm');
+  $: blockedUserIds = $auth.user?.blockedUserIds ?? [];
   $: isCreator = selectedChat?.createdBy === $auth.user?.id;
   $: isOwnMessage = contextMenu.senderId === $auth.user?.id;
   $: canDeleteContextMessage =
@@ -203,6 +206,10 @@
     activePinnedIndex = Math.max(0, pinnedMessages.length - 1);
     activePinnedCount = pinnedMessages.length;
   }
+  $: if ((selectedChat?.id ?? null) !== revealedBlockedChatId) {
+    revealedBlockedChatId = selectedChat?.id ?? null;
+    revealedBlockedMessageIds = [];
+  }
   $: if ((selectedChat?.id ?? null) === activePinnedChatId && pinnedMessages.length !== activePinnedCount) {
     if (pinnedMessages.length > activePinnedCount) {
       activePinnedIndex = Math.max(0, pinnedMessages.length - 1);
@@ -223,6 +230,26 @@
     } else if (currentReplyTarget !== replyTarget) {
       replyTarget = currentReplyTarget;
     }
+  }
+
+  function isBlockedUser(userId: string | null | undefined) {
+    return Boolean(userId && blockedUserIds.includes(userId));
+  }
+
+  function getBlockRelatedErrorMessage(exception: unknown, fallback: string) {
+    if (!(exception instanceof Error)) {
+      return fallback;
+    }
+
+    if (exception.message === 'This user blocked you') {
+      return 'Этот пользователь вас заблокировал, поэтому пригласить его нельзя';
+    }
+
+    if (exception.message === 'You blocked this user') {
+      return 'Сначала разблокируйте пользователя, чтобы пригласить его';
+    }
+
+    return exception.message || fallback;
   }
 
   type MessageGroup = {
@@ -536,6 +563,10 @@
       return '';
     }
 
+    if (isBlockedUser(message.senderId)) {
+      return 'Сообщение скрыто';
+    }
+
     const attachmentNames = message.fileIds
       .map((fileId) => fileDisplayById[fileId]?.name?.trim() || '')
       .filter(Boolean);
@@ -558,6 +589,10 @@
   function getPinnedPreviewText(message: Message | null | undefined) {
     if (!message) {
       return '';
+    }
+
+    if (isBlockedUser(message.senderId)) {
+      return 'Сообщение скрыто';
     }
 
     const attachmentNames = message.fileIds
@@ -2171,7 +2206,7 @@
       userSearch = '';
       searchResults = [];
     } catch (exception) {
-      error = exception instanceof Error ? exception.message : 'Не удалось добавить участника';
+      error = getBlockRelatedErrorMessage(exception, 'Не удалось добавить участника');
     } finally {
       addingMember = false;
     }
@@ -2200,6 +2235,46 @@
       error = exception instanceof Error ? exception.message : 'Не удалось удалить участника';
     } finally {
       removingMember = false;
+    }
+  }
+
+  function revealBlockedMessage(messageId: string) {
+    if (!revealedBlockedMessageIds.includes(messageId)) {
+      revealedBlockedMessageIds = [...revealedBlockedMessageIds, messageId];
+    }
+  }
+
+  async function handleToggleBlockedUser(userId: string) {
+    const member = selectedChat?.members?.find((item) => item.id === userId);
+    if (!member || !$auth.user) {
+      return;
+    }
+
+    const isBlocked = blockedUserIds.includes(userId);
+    const warningText = isBlocked
+      ? `Разблокировать пользователя ${member.username}?\n\nПосле этого он снова сможет приглашать вас в чаты и создавать с вами личный чат.`
+      : `Заблокировать пользователя ${member.username}?\n\nПоследствия блокировки:\n- личный чат с ним будет удалён;\n- он больше не сможет приглашать вас в чаты и создавать с вами личный чат;\n- все его сообщения и вложения будут скрыты под спойлером до ручного открытия.`;
+
+    if (!window.confirm(warningText)) {
+      return;
+    }
+
+    try {
+      if (isBlocked) {
+        const result = await api.users.unblock(userId);
+        auth.updateUser({ blockedUserIds: result.blockedUserIds });
+      } else {
+        const result = await api.users.block(userId);
+        auth.updateUser({ blockedUserIds: result.blockedUserIds });
+        for (const deletedChatId of result.deletedChatIds) {
+          chats.handleChatDeleted(deletedChatId);
+          if (selectedChat?.id === deletedChatId) {
+            window.location.hash = '#/chats';
+          }
+        }
+      }
+    } catch (exception) {
+      error = exception instanceof Error ? exception.message : 'Не удалось обновить статус блокировки';
     }
   }
 
@@ -2438,11 +2513,14 @@
       imagePreviewById={imagePreviewById}
       fileAssetById={fileAssetById}
       {messageReadByOthers}
+      {blockedUserIds}
+      {revealedBlockedMessageIds}
       unreadMarkerId={selectedChat?.unreadMarkerId}
       on:scroll={handleContainerScroll}
       on:fileclick={(event) => handleOpenMessageFile(event.detail.fileId, event.detail.messageFileIds)}
       on:replyclick={(event) => scrollToMessage(event.detail.messageId)}
       on:messagecontextmenu={(event) => handleContextMenu(event.detail.event, event.detail.messageId, event.detail.senderId)}
+      on:revealblocked={(event) => revealBlockedMessage(event.detail.messageId)}
     />
 
     {#if typingMemberNames.length > 0}
@@ -2691,6 +2769,7 @@
     createdById={selectedChat?.createdBy}
     chatName={chatDisplayName}
     chatAvatarUrl={chatDisplayAvatarUrl}
+    {blockedUserIds}
     on:close={() => (showMembersModal = false)}
     on:deleteChat={handleDeleteChat}
     on:leaveChat={openLeaveChatModal}
@@ -2713,6 +2792,7 @@
     }}
     on:openattachments={(event) => openAttachmentBrowser(event.detail.kind)}
     on:remove={(event) => removeMember(event.detail.userId)}
+    on:toggleblock={(event) => handleToggleBlockedUser(event.detail.userId)}
   />
 {/if}
 
@@ -2760,6 +2840,7 @@
   <PinnedMessagesModal
       items={pinnedMessages}
       {fileDisplayById}
+      {blockedUserIds}
       activeMessageId={currentPinnedMessage?.message.id ?? null}
     on:close={() => (showPinnedMessagesModal = false)}
     on:open={(event) => {

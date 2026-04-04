@@ -47,7 +47,7 @@
       sessionStorage.setItem('username', username);
       sessionStorage.setItem('publicKey', publicKeyExport);
 
-      auth.setUser({ id, username, publicKey: publicKeyExport }, privateKey);
+      auth.setUser({ id, username, publicKey: publicKeyExport, blockedUserIds: [] }, privateKey);
       pendingRegisteredUsername = username;
       showExportKeyPrompt = true;
     } catch (exception) {

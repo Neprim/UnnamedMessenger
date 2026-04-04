@@ -5,6 +5,7 @@
   export let items: PinnedMessage[] = [];
   export let activeMessageId: string | null = null;
   export let fileDisplayById: Record<string, { name?: string }> = {};
+  export let blockedUserIds: string[] = [];
 
   const dispatch = createEventDispatcher<{
     close: void;
@@ -13,6 +14,10 @@
   }>();
 
   function getPreview(item: PinnedMessage) {
+    if (item.message.senderId && blockedUserIds.includes(item.message.senderId)) {
+      return 'Сообщение скрыто';
+    }
+
     if (item.message.content?.trim()) {
       return item.message.content;
     }

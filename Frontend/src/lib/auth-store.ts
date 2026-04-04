@@ -90,7 +90,8 @@ function createAuthStore() {
                 username: userData.username,
                 publicKey: userData.publicKey,
                 avatarUrl: userData.avatarUrl,
-                avatarUpdatedAt: userData.avatarUpdatedAt
+                avatarUpdatedAt: userData.avatarUpdatedAt,
+                blockedUserIds: userData.blockedUserIds ?? []
               },
               privateKey
             }));

@@ -18,7 +18,10 @@ function getRelatedUserIds(userId) {
 function notifyPresenceChange(userId, isOnline) {
   const event = {
     type: isOnline ? 'user_online' : 'user_offline',
-    data: { userId }
+    data: {
+      userId,
+      ...(isOnline ? {} : { lastSeenAt: db.prepare('SELECT last_seen_at FROM users WHERE id = ?').get(userId)?.last_seen_at ?? null })
+    }
   };
 
   getRelatedUserIds(userId).forEach((relatedUserId) => {
@@ -45,6 +48,7 @@ function unsubscribe(userId, res) {
     clients.get(userId).delete(res);
     if (clients.get(userId).size === 0) {
       clients.delete(userId);
+      db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Math.floor(Date.now() / 1000), userId);
       becameOffline = true;
     }
   }

@@ -91,6 +91,8 @@ export interface UserResponse {
   publicKey: string;
   avatarUpdatedAt?: number | null;
   avatarUrl?: string | null;
+  lastSeenAt?: number | null;
+  blockedUserIds?: string[];
   createdAt: string;
 }
 
@@ -162,7 +164,17 @@ export const api = {
       request<{ success: boolean }>('/users/me/avatar', { method: 'DELETE' }),
     
     search: (query: string) => 
-      request<SearchUserResult[]>('/users/search?q=' + encodeURIComponent(query))
+      request<SearchUserResult[]>('/users/search?q=' + encodeURIComponent(query)),
+
+    block: (userId: string) =>
+      request<{ success: boolean; blockedUserIds: string[]; deletedChatIds: string[] }>(`/users/${userId}/block`, {
+        method: 'POST'
+      }),
+
+    unblock: (userId: string) =>
+      request<{ success: boolean; blockedUserIds: string[] }>(`/users/${userId}/block`, {
+        method: 'DELETE'
+      })
   },
 
   chats: {

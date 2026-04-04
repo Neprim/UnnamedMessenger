@@ -6,6 +6,8 @@ export interface User {
   publicKey: string;
   avatarUrl?: string | null;
   avatarUpdatedAt?: number | null;
+  lastSeenAt?: number | null;
+  blockedUserIds?: string[];
 }
 
 export interface ChatMember {
@@ -15,6 +17,7 @@ export interface ChatMember {
   encryptedKey?: string;
   lastReadAt?: number;
   isOnline?: boolean;
+  lastSeenAt?: number | null;
 }
 
 export interface LastMessage {
@@ -88,6 +91,7 @@ export interface Chat {
     username: string;
     avatarUrl?: string | null;
     isOnline?: boolean;
+    lastSeenAt?: number | null;
   } | null;
   unreadCount?: number;
   firstUnreadId?: string | null;
@@ -117,6 +121,7 @@ export interface SearchUserResult {
   username: string;
   publicKey: string;
   avatarUrl?: string | null;
+  lastSeenAt?: number | null;
 }
 
 export interface ChatMessagesResponse {

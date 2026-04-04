@@ -16,6 +16,7 @@
     documents: 0,
     media: 0
   };
+  export let blockedUserIds: string[] = [];
 
   const dispatch = createEventDispatcher<{
     close: void;
@@ -27,10 +28,31 @@
     editName: void;
     exporthistory: void;
     openattachments: { kind: 'images' | 'documents' | 'media' };
+    toggleblock: { userId: string };
   }>();
 
   $: chatKindLabel = chatType === 'pm' ? 'Личный чат' : 'Групповой чат';
   $: canEditChat = isCreator && chatType === 'gm';
+
+  function formatLastSeen(value?: number | null) {
+    if (!value) {
+      return 'Последний раз в сети: неизвестно';
+    }
+
+    return `Последний раз в сети: ${new Date(value * 1000).toLocaleString('ru-RU')}`;
+  }
+
+  function getMemberRole(member: ChatMember) {
+    if (member.id === createdById) {
+      return 'Создатель';
+    }
+
+    if (member.id === currentUserId) {
+      return 'Вы';
+    }
+
+    return 'Участник';
+  }
 </script>
 
 <div class="modal-shell">
@@ -120,16 +142,24 @@
                   <span class="member-status-dot" class:online={member.isOnline}></span>
                   <span>{member.isOnline ? 'В сети' : 'Не в сети'}</span>
                   <span>·</span>
-                  <span>{member.id === createdById ? 'Создатель' : member.id === currentUserId ? 'Вы' : 'Участник'}</span>
+                  <span>{getMemberRole(member)}</span>
                 </span>
-                <span class="member-role">{member.isOnline ? 'В сети' : 'Не в сети'}</span>
-                <span class="member-role">{member.id === currentUserId ? 'Вы' : 'Участник'}</span>
+                <span class="member-last-seen">{member.isOnline ? 'Последний раз в сети: сейчас' : formatLastSeen(member.lastSeenAt)}</span>
               </div>
             </div>
 
             {#if isCreator && chatType === 'gm' && member.id !== currentUserId}
-              <button class="remove-btn" type="button" on:click={() => dispatch('remove', { userId: member.id })}>
-                Удалить
+              <div class="member-actions">
+                <button class="neutral-btn" type="button" on:click={() => dispatch('toggleblock', { userId: member.id })}>
+                  {blockedUserIds.includes(member.id) ? 'Разблокировать' : 'Заблокировать'}
+                </button>
+                <button class="remove-btn" type="button" on:click={() => dispatch('remove', { userId: member.id })}>
+                  Удалить
+                </button>
+              </div>
+            {:else if member.id !== currentUserId}
+              <button class="neutral-btn" type="button" on:click={() => dispatch('toggleblock', { userId: member.id })}>
+                {blockedUserIds.includes(member.id) ? 'Разблокировать' : 'Заблокировать'}
               </button>
             {/if}
           </div>
@@ -389,7 +419,7 @@
   .member-meta {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
     min-width: 0;
   }
 
@@ -401,20 +431,18 @@
     white-space: nowrap;
   }
 
-  .member-role {
-    font-size: 12px;
-    color: #94a3b8;
-  }
-
   .member-role-online {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
+    font-size: 12px;
+    color: #64748b;
   }
 
-  .member-meta > .member-role:not(.member-role-online) {
-    display: none;
+  .member-last-seen {
+    font-size: 12px;
+    color: #94a3b8;
   }
 
   .member-status-dot {
@@ -439,6 +467,29 @@
     font-size: 13px;
     font-weight: 600;
     flex: none;
+  }
+
+  .member-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .neutral-btn {
+    border: none;
+    border-radius: 10px;
+    padding: 8px 12px;
+    background: #e2e8f0;
+    color: #334155;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    flex: none;
+  }
+
+  .neutral-btn:hover {
+    background: #cbd5e1;
   }
 
   .remove-btn:hover {
@@ -534,7 +585,8 @@
       align-items: stretch;
     }
 
-    .remove-btn {
+    .remove-btn,
+    .neutral-btn {
       width: 100%;
       min-height: 42px;
     }

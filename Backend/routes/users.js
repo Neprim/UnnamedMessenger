@@ -13,6 +13,7 @@ const {
   removeAvatarFile
 } = require('../utils/avatar');
 const { mapMessageRow, encodeSystemMessageContent } = require('../utils/message-files');
+const { getBlockedUserIds, hasBlocked, getPersonalChatIdsBetween } = require('../utils/blocks');
 
 const router = express.Router();
 
@@ -39,6 +40,8 @@ function mapUser(user) {
     publicKey: user.public_key,
     avatarUpdatedAt: user.avatar_updated_at,
     avatarUrl: getAvatarUrl(user.id, user.avatar_updated_at),
+    lastSeenAt: user.last_seen_at ?? null,
+    blockedUserIds: getBlockedUserIds(user.id),
     createdAt: user.created_at
   };
 }
@@ -87,7 +90,7 @@ async function normalizeAvatar(buffer) {
 
 router.get('/me', authenticate, (req, res) => {
   try {
-    const user = db.prepare('SELECT id, username, public_key, avatar_updated_at, created_at FROM users WHERE id = ?').get(req.userId);
+    const user = db.prepare('SELECT id, username, public_key, avatar_updated_at, last_seen_at, created_at FROM users WHERE id = ?').get(req.userId);
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -119,7 +122,7 @@ router.patch('/me', authenticate, (req, res) => {
 
     db.prepare('UPDATE users SET username = ? WHERE id = ?').run(username, req.userId);
 
-    const user = db.prepare('SELECT id, username, public_key, avatar_updated_at, created_at FROM users WHERE id = ?').get(req.userId);
+    const user = db.prepare('SELECT id, username, public_key, avatar_updated_at, last_seen_at, created_at FROM users WHERE id = ?').get(req.userId);
     res.json(mapUser(user));
   } catch (err) {
     console.error('Update user error:', err);
@@ -273,7 +276,7 @@ router.get('/search', authenticate, (req, res) => {
     }
 
     const users = db
-      .prepare('SELECT id, username, public_key, avatar_updated_at FROM users WHERE username LIKE ? LIMIT 20')
+      .prepare('SELECT id, username, public_key, avatar_updated_at, last_seen_at FROM users WHERE LOWER(username) LIKE LOWER(?) LIMIT 20')
       .all(`%${q}%`);
 
     res.json(
@@ -282,11 +285,78 @@ router.get('/search', authenticate, (req, res) => {
         username: user.username,
         publicKey: user.public_key,
         avatarUpdatedAt: user.avatar_updated_at,
-        avatarUrl: getAvatarUrl(user.id, user.avatar_updated_at)
+        avatarUrl: getAvatarUrl(user.id, user.avatar_updated_at),
+        lastSeenAt: user.last_seen_at ?? null
       }))
     );
   } catch (err) {
     console.error('Search users error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/:userId/block', authenticate, (req, res) => {
+  try {
+    const targetUserId = req.params.userId;
+
+    if (!targetUserId || targetUserId === req.userId) {
+      return res.status(400).json({ error: 'Cannot block this user' });
+    }
+
+    const targetUser = db.prepare('SELECT id FROM users WHERE id = ?').get(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const deletedChatIds = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO blocked_users (blocker_id, blocked_user_id, created_at)
+        VALUES (?, ?, strftime('%s', 'now'))
+        ON CONFLICT(blocker_id, blocked_user_id) DO NOTHING
+      `).run(req.userId, targetUserId);
+
+      const personalChatIds = getPersonalChatIdsBetween(req.userId, targetUserId);
+      for (const chatId of personalChatIds) {
+        db.prepare('DELETE FROM messages WHERE chat_id = ?').run(chatId);
+        db.prepare('DELETE FROM chat_members WHERE chat_id = ?').run(chatId);
+        db.prepare('DELETE FROM chats WHERE id = ?').run(chatId);
+      }
+
+      return personalChatIds;
+    })();
+
+    deletedChatIds.forEach((chatId) => {
+      sse.broadcast(req.userId, { type: 'chat_deleted', data: { chatId } });
+      sse.broadcast(targetUserId, { type: 'chat_deleted', data: { chatId } });
+    });
+
+    res.json({
+      success: true,
+      blockedUserIds: getBlockedUserIds(req.userId),
+      deletedChatIds
+    });
+  } catch (err) {
+    console.error('Block user error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/:userId/block', authenticate, (req, res) => {
+  try {
+    const targetUserId = req.params.userId;
+
+    if (!targetUserId || targetUserId === req.userId) {
+      return res.status(400).json({ error: 'Cannot unblock this user' });
+    }
+
+    db.prepare('DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_user_id = ?').run(req.userId, targetUserId);
+
+    res.json({
+      success: true,
+      blockedUserIds: getBlockedUserIds(req.userId)
+    });
+  } catch (err) {
+    console.error('Unblock user error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

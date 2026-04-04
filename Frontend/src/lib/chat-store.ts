@@ -928,27 +928,39 @@ function createChatsStore() {
         })
       );
     },
-    handlePresenceEvent: (userId: string, isOnline: boolean) => {
+    handlePresenceEvent: (userId: string, isOnline: boolean, lastSeenAt: number | null = null) => {
       update((chatList) =>
         chatList.map((chat) => {
           let changed = false;
           const members = (chat.members ?? []).map((member) => {
-            if (member.id !== userId || member.isOnline === isOnline) {
-              return member;
+            if (member.id === userId) {
+              const shouldUpdate =
+                member.isOnline !== isOnline ||
+                (!isOnline && (member.lastSeenAt ?? null) !== (lastSeenAt ?? null));
+
+              if (shouldUpdate) {
+                changed = true;
+                return {
+                  ...member,
+                  isOnline,
+                  lastSeenAt: isOnline ? member.lastSeenAt ?? null : lastSeenAt ?? member.lastSeenAt ?? null
+                };
+              }
             }
 
-            changed = true;
-            return {
-              ...member,
-              isOnline
-            };
+            return member;
           });
 
           const otherUser =
-            chat.otherUser?.id === userId && chat.otherUser.isOnline !== isOnline
+            chat.otherUser?.id === userId &&
+            (
+              chat.otherUser.isOnline !== isOnline ||
+              (!isOnline && (chat.otherUser.lastSeenAt ?? null) !== (lastSeenAt ?? null))
+            )
               ? {
                   ...chat.otherUser,
-                  isOnline
+                  isOnline,
+                  lastSeenAt: isOnline ? chat.otherUser.lastSeenAt ?? null : lastSeenAt ?? chat.otherUser.lastSeenAt ?? null
                 }
               : chat.otherUser;
 

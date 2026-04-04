@@ -50,12 +50,15 @@
     }
   > = {};
   export let messageReadByOthers: Record<string, boolean> = {};
+  export let blockedUserIds: string[] = [];
+  export let revealedBlockedMessageIds: string[] = [];
 
   const dispatch = createEventDispatcher<{
     scroll: Event;
     messagecontextmenu: { event: MouseEvent; messageId: string; senderId: string | null };
     fileclick: { fileId: string; messageFileIds: string[] };
     replyclick: { messageId: string };
+    revealblocked: { messageId: string };
   }>();
 
   function getAttachmentPreview(fileIds: string[]) {
@@ -79,6 +82,10 @@
       return 'Сообщение удалено';
     }
 
+    if (message.reply.senderId && blockedUserIds.includes(message.reply.senderId)) {
+      return 'Сообщение скрыто';
+    }
+
     if (message.reply.content?.trim()) {
       return message.reply.content;
     }
@@ -88,6 +95,14 @@
     }
 
     return 'Сообщение';
+  }
+
+  function isBlockedMessage(message: Message) {
+    return Boolean(
+      message.senderId &&
+        blockedUserIds.includes(message.senderId) &&
+        !revealedBlockedMessageIds.includes(message.id)
+    );
   }
 </script>
 
@@ -149,92 +164,102 @@
                   </button>
                 {/if}
 
-                {#if msg.content}
-                  <div class="message-text-area">
-                    <div class="message-content">{msg.content}</div>
-                  </div>
-                {/if}
+                {#if isBlockedMessage(msg)}
+                  <button
+                    type="button"
+                    class="blocked-message-spoiler"
+                    on:click={() => dispatch('revealblocked', { messageId: msg.id })}
+                  >
+                    Сообщение от заблокированного пользователя. Нажмите, чтобы показать
+                  </button>
+                {:else}
+                  {#if msg.content}
+                    <div class="message-text-area">
+                      <div class="message-content">{msg.content}</div>
+                    </div>
+                  {/if}
 
-                {#if msg.fileIds.length > 0}
-                  <div class="message-files" class:with-text={Boolean(msg.content)}>
-                    {#each msg.fileIds as fileId}
-                      {@const fileDisplay = fileDisplayById[fileId]}
-                      {@const imagePreview = imagePreviewById[fileId]}
-                      {@const fileAsset = fileAssetById[fileId]}
+                  {#if msg.fileIds.length > 0}
+                    <div class="message-files" class:with-text={Boolean(msg.content)}>
+                      {#each msg.fileIds as fileId}
+                        {@const fileDisplay = fileDisplayById[fileId]}
+                        {@const imagePreview = imagePreviewById[fileId]}
+                        {@const fileAsset = fileAssetById[fileId]}
 
-                      {#if fileDisplay?.status === 'ready' && imagePreview}
-                        <button
-                          type="button"
-                          class="image-preview-button"
-                          on:click={() => dispatch('fileclick', { fileId, messageFileIds: msg.fileIds })}
-                          aria-label={`Открыть изображение ${imagePreview.alt}`}
-                        >
-                          <img
-                            class="image-preview"
-                            src={imagePreview.objectUrl}
-                            alt={imagePreview.alt}
-                            width={imagePreview.width}
-                            height={imagePreview.height}
-                          />
-                        </button>
-                      {:else if fileDisplay?.status === 'ready' && fileAsset && fileAsset.type.startsWith('video/')}
-                        <!-- svelte-ignore a11y_media_has_caption -->
-                        <video
-                          class="video-preview"
-                          controls
-                          preload="metadata"
-                          src={fileAsset.objectUrl}
-                          title={fileDisplay.name || 'Видео'}
-                        ></video>
-                      {:else if fileDisplay?.status === 'ready' && fileAsset && fileAsset.type.startsWith('audio/')}
-                        <audio
-                          class="audio-preview"
-                          controls
-                          preload="metadata"
-                          src={fileAsset.objectUrl}
-                          title={fileDisplay.name || 'Аудио'}
-                        ></audio>
-                      {:else if fileDisplay?.type?.startsWith('image/') && fileDisplay.previewDataUrl}
-                        <div
-                          class="image-preview-fallback-wrap"
-                          style={`width:${fileDisplay.previewWidth || 48}px;height:${fileDisplay.previewHeight || 48}px;`}
-                        >
-                          <img
-                            class="image-preview image-preview-fallback"
-                            src={fileDisplay.previewDataUrl}
-                            alt={fileDisplay.name || 'Мини-превью вложения'}
-                            width={fileDisplay.previewWidth || 48}
-                            height={fileDisplay.previewHeight || 48}
+                        {#if fileDisplay?.status === 'ready' && imagePreview}
+                          <button
+                            type="button"
+                            class="image-preview-button"
+                            on:click={() => dispatch('fileclick', { fileId, messageFileIds: msg.fileIds })}
+                            aria-label={`Открыть изображение ${imagePreview.alt}`}
+                          >
+                            <img
+                              class="image-preview"
+                              src={imagePreview.objectUrl}
+                              alt={imagePreview.alt}
+                              width={imagePreview.width}
+                              height={imagePreview.height}
+                            />
+                          </button>
+                        {:else if fileDisplay?.status === 'ready' && fileAsset && fileAsset.type.startsWith('video/')}
+                          <!-- svelte-ignore a11y_media_has_caption -->
+                          <video
+                            class="video-preview"
+                            controls
+                            preload="metadata"
+                            src={fileAsset.objectUrl}
+                            title={fileDisplay.name || 'Видео'}
+                          ></video>
+                        {:else if fileDisplay?.status === 'ready' && fileAsset && fileAsset.type.startsWith('audio/')}
+                          <audio
+                            class="audio-preview"
+                            controls
+                            preload="metadata"
+                            src={fileAsset.objectUrl}
+                            title={fileDisplay.name || 'Аудио'}
+                          ></audio>
+                        {:else if fileDisplay?.type?.startsWith('image/') && fileDisplay.previewDataUrl}
+                          <div
+                            class="image-preview-fallback-wrap"
                             style={`width:${fileDisplay.previewWidth || 48}px;height:${fileDisplay.previewHeight || 48}px;`}
-                          />
-                        </div>
-                      {:else}
-                        <button
-                          type="button"
-                          class="file-chip"
-                          class:file-chip-missing={fileDisplay?.status === 'missing'}
-                          title={fileDisplay?.type || fileId}
-                          disabled={fileDisplay?.status !== 'ready'}
-                          on:click={() => dispatch('fileclick', { fileId, messageFileIds: msg.fileIds })}
-                        >
-                          {#if fileDisplay?.status === 'ready'}
-                            {fileDisplay.name}
-                            {#if fileDisplay.sizeLabel}
-                              ({fileDisplay.sizeLabel})
+                          >
+                            <img
+                              class="image-preview image-preview-fallback"
+                              src={fileDisplay.previewDataUrl}
+                              alt={fileDisplay.name || 'Мини-превью вложения'}
+                              width={fileDisplay.previewWidth || 48}
+                              height={fileDisplay.previewHeight || 48}
+                              style={`width:${fileDisplay.previewWidth || 48}px;height:${fileDisplay.previewHeight || 48}px;`}
+                            />
+                          </div>
+                        {:else}
+                          <button
+                            type="button"
+                            class="file-chip"
+                            class:file-chip-missing={fileDisplay?.status === 'missing'}
+                            title={fileDisplay?.type || fileId}
+                            disabled={fileDisplay?.status !== 'ready'}
+                            on:click={() => dispatch('fileclick', { fileId, messageFileIds: msg.fileIds })}
+                          >
+                            {#if fileDisplay?.status === 'ready'}
+                              {fileDisplay.name}
+                              {#if fileDisplay.sizeLabel}
+                                ({fileDisplay.sizeLabel})
+                              {/if}
+                            {:else if fileDisplay?.status === 'loading'}
+                              Загрузка файла...
+                            {:else if fileDisplay?.status === 'missing'}
+                              Файл удалён
+                            {:else if fileDisplay?.status === 'error'}
+                              Ошибка загрузки файла
+                            {:else}
+                              Файл {fileId.slice(0, 8)}
                             {/if}
-                          {:else if fileDisplay?.status === 'loading'}
-                            Загрузка файла...
-                          {:else if fileDisplay?.status === 'missing'}
-                            Файл удалён
-                          {:else if fileDisplay?.status === 'error'}
-                            Ошибка загрузки файла
-                          {:else}
-                            Файл {fileId.slice(0, 8)}
-                          {/if}
-                        </button>
-                      {/if}
-                    {/each}
-                  </div>
+                          </button>
+                        {/if}
+                      {/each}
+                    </div>
+                  {/if}
                 {/if}
               </div>
             </div>
@@ -405,6 +430,18 @@
 
   .reply-preview.deleted .reply-preview-line {
     color: #94a3b8;
+  }
+
+  .blocked-message-spoiler {
+    margin: 8px 12px 12px;
+    padding: 10px 12px;
+    border: 1px dashed #94a3b8;
+    border-radius: 12px;
+    background: rgba(148, 163, 184, 0.08);
+    color: #475569;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
   }
 
   .message-text-area {

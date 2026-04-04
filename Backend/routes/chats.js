@@ -14,6 +14,7 @@ const {
   encodeEncryptedMessageContent,
   encodeSystemMessageContent
 } = require('../utils/message-files');
+const { hasBlocked } = require('../utils/blocks');
 
 const router = express.Router();
 
@@ -186,6 +187,14 @@ router.post('/', authenticate, (req, res) => {
       if (existingChat) {
         return res.status(400).json({ error: 'Personal chat already exists with this user' });
       }
+
+      if (hasBlocked(req.userId, otherUserId)) {
+        return res.status(403).json({ error: 'You blocked this user' });
+      }
+
+      if (hasBlocked(otherUserId, req.userId)) {
+        return res.status(403).json({ error: 'This user blocked you' });
+      }
     }
     
     const chatId = uuidv4();
@@ -225,7 +234,7 @@ router.post('/', authenticate, (req, res) => {
     createSystemMessage(chatId, 'chat_created', {});
     
     members = db.prepare(`
-      SELECT u.id, u.username, u.avatar_updated_at, cm.encrypted_chat_key, cm.last_read_at
+      SELECT u.id, u.username, u.avatar_updated_at, u.last_seen_at, cm.encrypted_chat_key, cm.last_read_at
       FROM chat_members cm
       JOIN users u ON cm.user_id = u.id
       WHERE cm.chat_id = ?
@@ -245,6 +254,7 @@ router.post('/', authenticate, (req, res) => {
         avatarUrl: getAvatarUrl(m.id, m.avatar_updated_at),
         encryptedKey: m.encrypted_chat_key,
         lastReadAt: m.last_read_at,
+        lastSeenAt: m.last_seen_at ?? null,
         isOnline: sse.isUserOnline(m.id)
       })),
       pinnedMessages: []
@@ -275,7 +285,7 @@ router.get('/:chatId', authenticate, (req, res) => {
     }
     
     const members = db.prepare(`
-      SELECT u.id, u.username, u.avatar_updated_at, cm.encrypted_chat_key, cm.last_read_at
+      SELECT u.id, u.username, u.avatar_updated_at, u.last_seen_at, cm.encrypted_chat_key, cm.last_read_at
       FROM chat_members cm
       JOIN users u ON cm.user_id = u.id
       WHERE cm.chat_id = ?
@@ -295,6 +305,7 @@ router.get('/:chatId', authenticate, (req, res) => {
         avatarUrl: getAvatarUrl(m.id, m.avatar_updated_at),
         encryptedKey: m.encrypted_chat_key,
         lastReadAt: m.last_read_at,
+        lastSeenAt: m.last_seen_at ?? null,
         isOnline: sse.isUserOnline(m.id)
       })),
       pinnedMessages: getPinnedMessages(chat.id)
@@ -437,6 +448,14 @@ router.post('/:chatId/members/add', authenticate, (req, res) => {
     const existing = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(req.params.chatId, userId);
     if (existing) {
       return res.status(400).json({ error: 'User already in chat' });
+    }
+
+    if (hasBlocked(req.userId, userId)) {
+      return res.status(403).json({ error: 'You blocked this user' });
+    }
+
+    if (hasBlocked(userId, req.userId)) {
+      return res.status(403).json({ error: 'This user blocked you' });
     }
     
     db.prepare('INSERT INTO chat_members (chat_id, user_id, encrypted_chat_key, last_read_at) VALUES (?, ?, ?, 0)').run(req.params.chatId, userId, encryptedKey);

@@ -61,6 +61,7 @@ function ensureSchema() {
       salt TEXT NOT NULL,
       registration_ip TEXT,
       avatar_updated_at INTEGER,
+      last_seen_at INTEGER,
       file_quota_bytes INTEGER NOT NULL DEFAULT 104857600,
       created_at INTEGER DEFAULT (strftime('%s', 'now'))
     );
@@ -131,6 +132,15 @@ function ensureSchema() {
       FOREIGN KEY (pinned_by) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS blocked_users (
+      blocker_id TEXT NOT NULL,
+      blocked_user_id TEXT NOT NULL,
+      created_at INTEGER DEFAULT (strftime('%s', 'now')),
+      PRIMARY KEY (blocker_id, blocked_user_id),
+      FOREIGN KEY (blocker_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (blocked_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
     CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_message_id);
@@ -142,12 +152,20 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_message_files_file_id ON message_files(file_id);
     CREATE INDEX IF NOT EXISTS idx_pinned_messages_chat ON pinned_messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_pinned_messages_message ON pinned_messages(message_id);
+    CREATE INDEX IF NOT EXISTS idx_blocked_users_blocker ON blocked_users(blocker_id);
+    CREATE INDEX IF NOT EXISTS idx_blocked_users_blocked ON blocked_users(blocked_user_id);
   `);
 
   if (!columnExists('users', 'registration_ip')) {
     db.exec(`
       ALTER TABLE users ADD COLUMN registration_ip TEXT;
       CREATE INDEX IF NOT EXISTS idx_users_registration_ip ON users(registration_ip);
+    `);
+  }
+
+  if (!columnExists('users', 'last_seen_at')) {
+    db.exec(`
+      ALTER TABLE users ADD COLUMN last_seen_at INTEGER;
     `);
   }
 

@@ -47,7 +47,18 @@
         const privateKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(exportedPrivateKey)));
         sessionStorage.setItem('privateKey', privateKeyBase64);
 
-        auth.setUser({ id, username, publicKey, avatarUrl, avatarUpdatedAt }, privateKey);
+        const me = await api.users.me().catch(() => null);
+        auth.setUser(
+          {
+            id,
+            username,
+            publicKey,
+            avatarUrl,
+            avatarUpdatedAt,
+            blockedUserIds: me?.blockedUserIds ?? []
+          },
+          privateKey
+        );
         push('/chats');
       } catch {
         error = 'Не удалось расшифровать сохранённый ключ. Загрузите новый ключ.';

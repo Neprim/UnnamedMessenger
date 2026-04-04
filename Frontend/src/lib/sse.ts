@@ -17,7 +17,7 @@ export const chatDeletedEvent = writable<string | null>(null);
 export const chatUpdatedEvent = writable<string | null>(null);
 export const typingEvent = writable<{ chatId: string; userId: string } | null>(null);
 export const pinsUpdatedEvent = writable<{ chatId: string; pinnedMessages: PinnedMessage[] } | null>(null);
-export const userPresenceEvent = writable<{ userId: string; isOnline: boolean } | null>(null);
+export const userPresenceEvent = writable<{ userId: string; isOnline: boolean; lastSeenAt?: number | null } | null>(null);
 export const readStateEvent = writable<{ chatId: string; userId: string; lastReadAt: number } | null>(null);
 
 let eventSource: EventSource | null = null;
@@ -166,14 +166,16 @@ function handleSSEEvent(event: SSEEvent) {
     case 'user_online': {
       userPresenceEvent.set({
         userId: event.data.userId,
-        isOnline: true
+        isOnline: true,
+        lastSeenAt: null
       });
       break;
     }
     case 'user_offline': {
       userPresenceEvent.set({
         userId: event.data.userId,
-        isOnline: false
+        isOnline: false,
+        lastSeenAt: event.data.lastSeenAt ?? null
       });
       break;
     }

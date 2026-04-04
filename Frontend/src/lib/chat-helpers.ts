@@ -34,7 +34,7 @@ export function getMemberMap(members: ChatMember[] = []): Map<string, string> {
 export function getOtherUser(
   chat: Pick<Chat, 'type' | 'members'>,
   currentUserId?: string
-): { id: string; username: string; avatarUrl?: string | null; isOnline?: boolean } | null {
+): { id: string; username: string; avatarUrl?: string | null; isOnline?: boolean; lastSeenAt?: number | null } | null {
   if (chat.type !== 'pm' || !chat.members) {
     return null;
   }
@@ -45,7 +45,8 @@ export function getOtherUser(
         id: otherMember.id,
         username: otherMember.username,
         avatarUrl: otherMember.avatarUrl,
-        isOnline: otherMember.isOnline
+        isOnline: otherMember.isOnline,
+        lastSeenAt: otherMember.lastSeenAt ?? null
       }
     : null;
 }
