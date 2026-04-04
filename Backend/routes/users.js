@@ -12,7 +12,7 @@ const {
   getAvatarUrl,
   removeAvatarFile
 } = require('../utils/avatar');
-const { mapMessageRow } = require('../utils/message-files');
+const { mapMessageRow, encodeSystemMessageContent } = require('../utils/message-files');
 
 const router = express.Router();
 
@@ -23,7 +23,7 @@ function createSystemMessage(chatId, eventType, data) {
 
   db.prepare(
     'INSERT INTO messages (id, chat_id, sender_id, content, timestamp) VALUES (?, ?, NULL, ?, ?)'
-  ).run(messageId, chatId, content, timestamp);
+  ).run(messageId, chatId, encodeSystemMessageContent(content), timestamp);
 
   const message = db.prepare(
     'SELECT id, chat_id, sender_id, content, timestamp, edited_at FROM messages WHERE id = ?'

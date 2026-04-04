@@ -6,6 +6,7 @@ const db = new Database(dbPath);
 
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+db.pragma('busy_timeout = 5000');
 
 function columnExists(tableName, columnName) {
   return db
@@ -90,7 +91,7 @@ function ensureSchema() {
       id TEXT PRIMARY KEY,
       chat_id TEXT NOT NULL,
       sender_id TEXT,
-      content TEXT,
+      content BLOB,
       reply_to_message_id TEXT,
       timestamp INTEGER DEFAULT (strftime('%s', 'now')),
       edited_at INTEGER,

@@ -8,7 +8,8 @@ const {
   setMessageFileIds,
   getMessageFileIdsMap,
   getReplyPreviewByMessageId,
-  mapMessageRow
+  mapMessageRow,
+  encodeEncryptedMessageContent
 } = require('../utils/message-files');
 
 const router = express.Router();
@@ -31,9 +32,14 @@ function getMessageFileIds(messageId) {
 
 router.put('/:messageId', authenticate, (req, res) => {
   try {
-    const { content, replyToMessageId } = req.body;
+    const { content, contentLength = 0, replyToMessageId } = req.body;
     
-    const message = db.prepare('SELECT chat_id, sender_id FROM messages WHERE id = ?').get(req.params.messageId);
+    const message = db.prepare(`
+      SELECT m.chat_id, m.sender_id, c.type AS chat_type, c.created_by
+      FROM messages m
+      JOIN chats c ON c.id = m.chat_id
+      WHERE m.id = ?
+    `).get(req.params.messageId);
     if (!message) {
       return res.status(404).json({ error: 'Message not found' });
     }
@@ -60,8 +66,18 @@ router.put('/:messageId', authenticate, (req, res) => {
       return res.status(400).json({ error: 'Content or fileIds required' });
     }
     
-    if (content && content.length > config.limits.maxMessageLength) {
+    const normalizedContentLength = Number(contentLength || 0);
+    if (normalizedContentLength > 0 && normalizedContentLength > config.limits.maxMessageLength) {
       return res.status(400).json({ error: `Message exceeds ${config.limits.maxMessageLength} characters` });
+    }
+
+    let encodedContent = null;
+    if (content) {
+      try {
+        encodedContent = encodeEncryptedMessageContent(content);
+      } catch {
+        return res.status(400).json({ error: 'Invalid encrypted message payload' });
+      }
     }
 
     if (replyToMessageId !== undefined && replyToMessageId !== null) {
@@ -77,7 +93,7 @@ router.put('/:messageId', authenticate, (req, res) => {
     
     const editedAt = Math.floor(Date.now() / 1000);
     db.prepare('UPDATE messages SET content = ?, reply_to_message_id = ?, edited_at = ? WHERE id = ?').run(
-      content || null,
+      encodedContent,
       replyToMessageId || null,
       editedAt,
       req.params.messageId
@@ -103,12 +119,20 @@ router.put('/:messageId', authenticate, (req, res) => {
 
 router.delete('/:messageId', authenticate, (req, res) => {
   try {
-    const message = db.prepare('SELECT chat_id, sender_id FROM messages WHERE id = ?').get(req.params.messageId);
+    const message = db.prepare(`
+      SELECT m.chat_id, m.sender_id, c.type AS chat_type, c.created_by
+      FROM messages m
+      JOIN chats c ON c.id = m.chat_id
+      WHERE m.id = ?
+    `).get(req.params.messageId);
     if (!message) {
       return res.status(404).json({ error: 'Message not found' });
     }
     
-    if (message.sender_id !== req.userId) {
+    const canDeleteOwn = message.sender_id === req.userId;
+    const canDeleteAsCreator = message.chat_type === 'gm' && message.created_by === req.userId;
+
+    if (!canDeleteOwn && !canDeleteAsCreator) {
       return res.status(403).json({ error: 'Cannot delete other\'s messages' });
     }
     

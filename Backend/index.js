@@ -13,6 +13,7 @@ if (typeof process.loadEnvFile === 'function' && fs.existsSync(envPath)) {
 }
 
 const config = require('./config');
+const { logServerError } = require('./utils/logger');
 
 const app = express();
 
@@ -86,6 +87,10 @@ if (fs.existsSync(distPath)) {
 }
 
 app.use((err, req, res, next) => {
+  logServerError('express.middleware', err, {
+    method: req.method,
+    url: req.originalUrl
+  });
   console.error(err.stack);
   res.status(500).json({ error: 'Internal server error' });
 });
@@ -96,6 +101,16 @@ const httpsOptions = {
 };
 
 const PORT = config.app.port;
+process.on('uncaughtException', (error) => {
+  logServerError('process.uncaughtException', error);
+  console.error(error);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logServerError('process.unhandledRejection', reason);
+  console.error(reason);
+});
+
 if (isProduction) {
   https.createServer(httpsOptions, app).listen(PORT, () => {           
     console.log(`Server running on port ${PORT} (HTTPS)`);             

@@ -1,6 +1,7 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
+const config = require('../config');
 const { authenticate } = require('../middleware/auth');
 const sse = require('../sse');
 const { getAvatarUrl } = require('../utils/avatar');
@@ -9,7 +10,9 @@ const {
   setMessageFileIds,
   getMessageFileIdsMap,
   getReplyPreviewByMessageId,
-  mapMessageRow
+  mapMessageRow,
+  encodeEncryptedMessageContent,
+  encodeSystemMessageContent
 } = require('../utils/message-files');
 
 const router = express.Router();
@@ -21,7 +24,7 @@ function createSystemMessage(chatId, eventType, data) {
   
   db.prepare(
     'INSERT INTO messages (id, chat_id, sender_id, content, timestamp) VALUES (?, ?, NULL, ?, ?)'
-  ).run(messageId, chatId, content, timestamp);
+  ).run(messageId, chatId, encodeSystemMessageContent(content), timestamp);
   
   const message = db.prepare(
     'SELECT id, chat_id, sender_id, content, reply_to_message_id, timestamp, edited_at FROM messages WHERE id = ?'
@@ -769,7 +772,7 @@ router.put('/:chatId/avatar', authenticate, (req, res) => {
 
 router.post('/:chatId/messages', authenticate, (req, res) => {
   try {
-    const { content, replyToMessageId } = req.body;
+    const { content, contentLength = 0, replyToMessageId } = req.body;
     const fileValidation = validateAttachableFileIds(req.params.chatId, req.body.fileIds);
     if (!fileValidation.ok) {
       return res.status(400).json({
@@ -793,8 +796,9 @@ router.post('/:chatId/messages', authenticate, (req, res) => {
       return res.status(400).json({ error: 'Content or fileIds required' });
     }
     
-    if (content && content.length > 10000) {
-      return res.status(400).json({ error: 'Message exceeds 10000 characters' });
+    const normalizedContentLength = Number(contentLength || 0);
+    if (normalizedContentLength > 0 && normalizedContentLength > config.limits.maxMessageLength) {
+      return res.status(400).json({ error: `Message exceeds ${config.limits.maxMessageLength} characters` });
     }
 
     if (replyToMessageId !== undefined && replyToMessageId !== null) {
@@ -808,13 +812,22 @@ router.post('/:chatId/messages', authenticate, (req, res) => {
       }
     }
     
+    let encodedContent = null;
+    if (content) {
+      try {
+        encodedContent = encodeEncryptedMessageContent(content);
+      } catch {
+        return res.status(400).json({ error: 'Invalid encrypted message payload' });
+      }
+    }
+
     const messageId = uuidv4();
     
     db.prepare('INSERT INTO messages (id, chat_id, sender_id, content, reply_to_message_id) VALUES (?, ?, ?, ?, ?)').run(
       messageId,
       req.params.chatId,
       req.userId,
-      content || null,
+      encodedContent,
       replyToMessageId || null
     );
     setMessageFileIds(messageId, fileIds);

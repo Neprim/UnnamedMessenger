@@ -905,7 +905,7 @@
                 "properties": {
                   "content": {
                     "type": "string",
-                    "description": "Text content (max 10000 chars)"
+                    "description": "Text content (max 8000 chars)"
                   },
                   "fileIds": {
                     "type": "array",
@@ -995,7 +995,7 @@
                 "properties": {
                   "content": {
                     "type": "string",
-                    "description": "New text content (max 10000 chars)"
+                    "description": "New text content (max 8000 chars)"
                   },
                   "fileIds": {
                     "type": "array",

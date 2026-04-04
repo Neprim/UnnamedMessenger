@@ -94,6 +94,7 @@
   let scrollTimeout: ReturnType<typeof setTimeout> | null = null;
   let errorTimeout: ReturnType<typeof setTimeout> | null = null;
   let loadedChatId: string | null = null;
+  let composerResetToken = 0;
   let pendingReadCheckForChatId: string | null = null;
   let shouldStickToBottom = true;
   let previousMessageCount = 0;
@@ -129,6 +130,7 @@
   const TYPING_THROTTLE_MS = 3000;
   const ERROR_TOAST_DURATION_MS = 4000;
   const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+  const MAX_MESSAGE_LENGTH = 8000;
 
   $: selectedChat = $chats.find((chat) => chat.id === params.id) ?? chatDetail;
   $: messages = selectedChat?.messages ?? [];
@@ -140,6 +142,14 @@
   $: canAddMembers = Boolean(isCreator && selectedChat?.type === 'gm');
   $: isCreator = selectedChat?.createdBy === $auth.user?.id;
   $: isOwnMessage = contextMenu.senderId === $auth.user?.id;
+  $: canDeleteContextMessage =
+    isOwnMessage ||
+    Boolean(
+      isCreator &&
+        selectedChat?.type === 'gm' &&
+        contextMenu.senderId &&
+        contextMenu.senderId !== $auth.user?.id
+    );
   $: isPinnedMessage = Boolean(selectedChat?.pinnedMessages?.some((item) => item.message.id === contextMenu.messageId));
   $: typingMemberNames = (selectedChat?.typingUsers ?? [])
     .map((entry) => selectedChat?.members?.find((member) => member.id === entry.userId)?.username)
@@ -678,6 +688,10 @@
 
   async function handleEditMessage() {
     if (!editingMessage || (!editingText.trim() && editingMessage.fileIds.length === 0)) return;
+    if (editingText.length > MAX_MESSAGE_LENGTH) {
+      error = `Сообщение не должно превышать ${MAX_MESSAGE_LENGTH} символов`;
+      return;
+    }
 
     try {
       await chats.editMessage(params.id, editingMessage.id, editingText);
@@ -1195,6 +1209,10 @@
   async function handleSendMessage() {
     clearError();
     if ((!newMessage.trim() && pendingAttachments.length === 0 && selectedReusableAttachments.length === 0) || sending || !chatKey) return;
+    if (newMessage.length > MAX_MESSAGE_LENGTH) {
+      error = `Сообщение не должно превышать ${MAX_MESSAGE_LENGTH} символов`;
+      return;
+    }
     if (getSelectedAttachmentCount() > MAX_ATTACHMENTS_PER_MESSAGE) {
       error = `К сообщению можно прикрепить не более ${MAX_ATTACHMENTS_PER_MESSAGE} вложений`;
       return;
@@ -1248,6 +1266,7 @@
         replyTarget?.id ?? null
       );
       newMessage = '';
+      composerResetToken += 1;
       replyTarget = null;
       pendingAttachments = [];
       selectedReusableAttachments = [];
@@ -1993,6 +2012,7 @@
       attachments={composerAttachments}
       attachmentsDisabled={sending || !chatKey}
       dragActive={isDragActive}
+      resetToken={composerResetToken}
       {sending}
       on:submit={handleSendMessage}
       on:pickfiles={(event) => handleFilePick(event.detail.files)}
@@ -2044,6 +2064,8 @@
         >
           Редактировать
         </button>
+      {/if}
+      {#if canDeleteContextMessage}
         <button class="context-menu-item danger" type="button" on:click={handleDeleteFromMenu}>Удалить</button>
       {/if}
     </div>

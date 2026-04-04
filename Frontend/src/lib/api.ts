@@ -226,18 +226,18 @@ export const api = {
         method: 'DELETE'
       }),
 
-    sendMessage: (chatId: string, content: string, fileIds?: string[], replyToMessageId?: string | null) => 
+    sendMessage: (chatId: string, content: string, contentLength?: number, fileIds?: string[], replyToMessageId?: string | null) => 
       request<Message>(`/chats/${chatId}/messages`, { 
         method: 'POST', 
-        body: JSON.stringify({ content, fileIds, replyToMessageId }) 
+        body: JSON.stringify({ content, contentLength, fileIds, replyToMessageId }) 
       })
   },
 
   messages: {
-    edit: (messageId: string, content: string, fileIds?: string[], replyToMessageId?: string | null) => 
+    edit: (messageId: string, content: string, contentLength?: number, fileIds?: string[], replyToMessageId?: string | null) => 
       request<Message>(`/messages/${messageId}`, { 
         method: 'PUT', 
-        body: JSON.stringify({ content, fileIds, replyToMessageId }) 
+        body: JSON.stringify({ content, contentLength, fileIds, replyToMessageId }) 
       }),
     
     delete: (messageId: string) => 

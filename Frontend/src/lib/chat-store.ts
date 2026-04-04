@@ -518,7 +518,7 @@ function createChatsStore() {
       }
 
       const encryptedContent = content ? await crypto.encryptMessage(chat.chatKey, content) : '';
-      const message = await api.chats.sendMessage(chatId, encryptedContent, fileIds, replyToMessageId);
+      const message = await api.chats.sendMessage(chatId, encryptedContent, content.length, fileIds, replyToMessageId);
       const replyMessage = replyToMessageId
         ? chat.messages?.find((item) => item.id === replyToMessageId) ?? null
         : null;
@@ -579,6 +579,7 @@ function createChatsStore() {
       const updatedMessage = await api.messages.edit(
         messageId,
         encryptedContent,
+        content.length,
         existingMessage?.fileIds ?? [],
         replyToMessageId ?? existingMessage?.replyToMessageId ?? null
       );

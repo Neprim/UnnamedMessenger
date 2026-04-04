@@ -7,6 +7,7 @@
   export let attachments: Array<{ id: string; name: string; size: number; uploading?: boolean }> = [];
   export let attachmentsDisabled = false;
   export let dragActive = false;
+  export let resetToken = 0;
 
   const dispatch = createEventDispatcher<{
     submit: void;
@@ -17,6 +18,8 @@
 
   let fileInput: HTMLInputElement | null = null;
   let textareaElement: HTMLTextAreaElement | null = null;
+  let showCharacterCount = false;
+  let lastResetToken = 0;
 
   function getMaxTextareaHeight() {
     if (typeof window === 'undefined') {
@@ -71,8 +74,22 @@
 
     const maxHeight = getMaxTextareaHeight();
     textareaElement.style.height = 'auto';
+    const reachedLimit = textareaElement.scrollHeight > maxHeight;
     textareaElement.style.height = `${Math.min(textareaElement.scrollHeight, maxHeight)}px`;
-    textareaElement.style.overflowY = textareaElement.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    textareaElement.style.overflowY = reachedLimit ? 'auto' : 'hidden';
+    showCharacterCount = reachedLimit;
+  }
+
+  function resetTextarea() {
+    showCharacterCount = false;
+    if (!textareaElement) return;
+    textareaElement.style.height = 'auto';
+    textareaElement.style.overflowY = 'hidden';
+  }
+
+  $: if (resetToken !== lastResetToken) {
+    lastResetToken = resetToken;
+    tick().then(resetTextarea);
   }
 
   $: tick().then(resizeTextarea);
@@ -95,11 +112,16 @@
     disabled={disabled}
     on:paste={handlePaste}
     on:keydown={handleKeyDown}
+    on:input={resizeTextarea}
   ></textarea>
   <button type="submit" disabled={disabled || (!value.trim() && attachments.length === 0)}>
     {sending ? '...' : 'Отправить'}
   </button>
 </form>
+
+{#if showCharacterCount}
+  <div class="character-count">{value.length}</div>
+{/if}
 
 {#if attachments.length > 0}
   <div class="attachments">
@@ -261,6 +283,14 @@
     border-top: 1px solid #f1f5f9;
   }
 
+  .character-count {
+    padding: 6px 28px 0;
+    text-align: right;
+    font-size: 12px;
+    line-height: 1;
+    color: #64748b;
+  }
+
   .attachment-chip {
     display: inline-flex;
     align-items: center;
@@ -342,6 +372,11 @@
     .attachments {
       gap: 6px;
       padding: 0 12px 12px;
+    }
+
+    .character-count {
+      padding: 4px 16px 0;
+      font-size: 11px;
     }
 
     .attachment-chip {

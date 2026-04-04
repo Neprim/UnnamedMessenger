@@ -339,7 +339,7 @@
     align-items: flex-end;
     gap: 8px;
     align-self: flex-start;
-    max-width: 55%;
+    max-width: 68%;
     min-width: 0;
   }
 

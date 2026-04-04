@@ -7,6 +7,7 @@ const db = require('../db');
 const config = require('../config');
 const { authenticate } = require('../middleware/auth');
 const { getAvatarUrl } = require('../utils/avatar');
+const { logServerError, logUserRegistration } = require('../utils/logger');
 
 const router = express.Router();
 
@@ -87,10 +88,11 @@ router.post('/register', async (req, res) => {
       sameSite: 'strict'
     });
 
-    console.log(`Пользователь "${username}" зарегистрировался.`);
+    logUserRegistration({ userId, username, registrationIp });
 
     res.status(201).json({ id: userId, username, salt, token });
   } catch (err) {
+    logServerError('auth.register', err);
     console.error('Register error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -134,6 +136,7 @@ router.post('/login', async (req, res) => {
       token
     });
   } catch (err) {
+    logServerError('auth.login', err);
     console.error('Login error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -144,7 +147,7 @@ router.post('/logout', (req, res) => {
   res.json({ message: 'Logged out' });
 });
 
-router.post('/change-password', async (req, res) => {
+router.post('/change-password', authenticate, async (req, res) => {
   try {
     const { newPassword } = req.body;
 
@@ -164,6 +167,7 @@ router.post('/change-password', async (req, res) => {
 
     res.json({ salt: newSalt });
   } catch (err) {
+    logServerError('auth.changePassword', err, { userId: req.userId });
     console.error('Change password error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }

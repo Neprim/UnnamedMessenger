@@ -1,5 +1,59 @@
 const db = require('../db');
 const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+function isValidBase64Payload(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length % 4 !== 0 || !BASE64_RE.test(value)) {
+    return false;
+  }
+
+  try {
+    const normalized = value.replace(/=+$/u, '');
+    return Buffer.from(value, 'base64').toString('base64').replace(/=+$/u, '') === normalized;
+  } catch {
+    return false;
+  }
+}
+
+function encodeEncryptedMessageContent(content) {
+  if (!content) {
+    return null;
+  }
+
+  if (!isValidBase64Payload(content)) {
+    throw new Error('Invalid encrypted message payload');
+  }
+
+  return Buffer.from(content, 'base64');
+}
+
+function encodeSystemMessageContent(content) {
+  if (!content) {
+    return null;
+  }
+
+  return Buffer.from(content, 'utf8');
+}
+
+function decodeStoredMessageContent(content, isSystemMessage = false) {
+  if (content === null || content === undefined) {
+    return '';
+  }
+
+  if (Buffer.isBuffer(content)) {
+    return isSystemMessage ? content.toString('utf8') : content.toString('base64');
+  }
+
+  if (content instanceof Uint8Array) {
+    return Buffer.from(content).toString(isSystemMessage ? 'utf8' : 'base64');
+  }
+
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  return '';
+}
 
 function normalizeFileIds(fileIds) {
   if (!Array.isArray(fileIds)) {
@@ -147,14 +201,14 @@ function getReplyPreviewMap(messages) {
       return;
     }
 
-    result.set(replyId, {
-      id: row.id,
-      senderId: row.sender_id,
-      senderUsername: row.sender_username ?? 'Unknown',
-      content: row.content ?? '',
-      fileIds: fileIdsByMessage.get(row.id) || [],
-      isDeleted: false
-    });
+      result.set(replyId, {
+        id: row.id,
+        senderId: row.sender_id,
+        senderUsername: row.sender_username ?? 'Unknown',
+        content: decodeStoredMessageContent(row.content, row.sender_id === null || row.sender_id === undefined),
+        fileIds: fileIdsByMessage.get(row.id) || [],
+        isDeleted: false
+      });
   });
 
   return result;
@@ -192,7 +246,7 @@ function mapMessageRow(message, fileIdsByMessage = null, replyPreviewByMessageId
     id: message.id,
     chatId: message.chat_id,
     senderId: message.sender_id,
-    content: message.content,
+    content: decodeStoredMessageContent(message.content, message.sender_id === null || message.sender_id === undefined),
     replyToMessageId,
     reply,
     fileIds,
@@ -209,5 +263,9 @@ module.exports = {
   getMessageFileIds,
   getReplyPreviewMap,
   getReplyPreviewByMessageId,
-  mapMessageRow
+  mapMessageRow,
+  isValidBase64Payload,
+  encodeEncryptedMessageContent,
+  encodeSystemMessageContent,
+  decodeStoredMessageContent
 };

@@ -31,7 +31,7 @@ module.exports = {
     httpOnly: false
   },
   limits: {
-    maxMessageLength: parseIntEnv('MAX_MESSAGE_LENGTH', 15000),
+    maxMessageLength: parseIntEnv('MAX_MESSAGE_LENGTH', 8000),
     maxUsernameLength: parseIntEnv('MAX_USERNAME_LENGTH', 30),
     maxAccountsPerIp: parseIntEnv('MAX_ACCOUNTS_PER_IP', 3),
     defaultFileQuotaBytes: parseIntEnv('DEFAULT_FILE_QUOTA_BYTES', 100 * 1024 * 1024),
