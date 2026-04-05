@@ -104,6 +104,24 @@
         !revealedBlockedMessageIds.includes(message.id)
     );
   }
+
+  function escapeHtml(value: string) {
+    return value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function renderMessageContent(content: string) {
+    const escaped = escapeHtml(content);
+    return escaped.replace(
+      /(https?:\/\/[^\s<]+)/g,
+      (url) =>
+        `<a href="${url}" target="_blank" rel="noopener noreferrer" class="message-link">${url}</a>`
+    );
+  }
 </script>
 
 <div class="messages" bind:this={container} on:scroll={(event) => dispatch('scroll', event)}>
@@ -175,7 +193,7 @@
                 {:else}
                   {#if msg.content}
                     <div class="message-text-area">
-                      <div class="message-content">{msg.content}</div>
+                      <div class="message-content">{@html renderMessageContent(msg.content)}</div>
                     </div>
                   {/if}
 
@@ -218,18 +236,18 @@
                             src={fileAsset.objectUrl}
                             title={fileDisplay.name || 'Аудио'}
                           ></audio>
-                        {:else if fileDisplay?.type?.startsWith('image/') && fileDisplay.previewDataUrl}
+                        {:else if fileDisplay?.type?.startsWith('image/') && fileDisplay.previewDataUrl && fileDisplay.previewWidth && fileDisplay.previewHeight}
                           <div
                             class="image-preview-fallback-wrap"
-                            style={`width:${fileDisplay.previewWidth || 48}px;height:${fileDisplay.previewHeight || 48}px;`}
+                            style={`width:${fileDisplay.previewWidth}px;height:${fileDisplay.previewHeight}px;`}
                           >
                             <img
                               class="image-preview image-preview-fallback"
                               src={fileDisplay.previewDataUrl}
                               alt={fileDisplay.name || 'Мини-превью вложения'}
-                              width={fileDisplay.previewWidth || 48}
-                              height={fileDisplay.previewHeight || 48}
-                              style={`width:${fileDisplay.previewWidth || 48}px;height:${fileDisplay.previewHeight || 48}px;`}
+                              width={fileDisplay.previewWidth}
+                              height={fileDisplay.previewHeight}
+                              style={`width:${fileDisplay.previewWidth}px;height:${fileDisplay.previewHeight}px;`}
                             />
                           </div>
                         {:else}
@@ -459,9 +477,16 @@
   .message-content {
     overflow-wrap: anywhere;
     word-break: break-word;
+    white-space: pre-wrap;
     font-size: 15px;
     line-height: 1.4;
     min-width: 0;
+  }
+
+  :global(.message-link) {
+    color: #2563eb;
+    text-decoration: underline;
+    word-break: break-all;
   }
 
   .message-files {
@@ -478,6 +503,9 @@
   .file-chip {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    min-width: 96px;
+    max-width: min(100%, 360px);
     padding: 4px 8px;
     border-radius: 999px;
     border: none;
@@ -485,6 +513,9 @@
     color: #334155;
     font-size: 12px;
     cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .file-chip-missing {

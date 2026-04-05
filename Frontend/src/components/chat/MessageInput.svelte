@@ -22,6 +22,10 @@
   let showCharacterCount = false;
   let lastResetToken = 0;
 
+  export function focusTextarea() {
+    textareaElement?.focus();
+  }
+
   function getMaxTextareaHeight() {
     if (typeof window === 'undefined') {
       return 320;
@@ -232,6 +236,7 @@
     resize: none;
     overflow-y: hidden;
     font-family: inherit;
+    white-space: pre-wrap;
     transition:
       border-color 0.18s ease,
       box-shadow 0.18s ease,

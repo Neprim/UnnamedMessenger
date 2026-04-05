@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { push } from 'svelte-spa-router';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
@@ -20,6 +20,8 @@
 
   export let params: { id?: string } = {};
 
+  const NOTIFICATION_VOLUME_STORAGE_KEY = 'unnamed-messenger:notification-volume';
+
   let loading = true;
   let showCreateModal = false;
   let showSettingsModal = false;
@@ -32,6 +34,7 @@
   let showUserFilesModal = false;
   let showSecuritySection = false;
   let logoutOnBrowserClose = true;
+  let notificationVolume = 0.6;
   let error = '';
   let errorTimeout: ReturnType<typeof setTimeout> | null = null;
   let exportConfirmChecked = false;
@@ -143,6 +146,9 @@
   }
   $: if (showSettingsModal) {
     logoutOnBrowserClose = getLogoutOnBrowserClose();
+  }
+  $: if (showUsernameModal) {
+    tick().then(() => (document.getElementById('newUsername') as HTMLInputElement | null)?.focus());
   }
 
   function loadPinnedChatIds(storageKey: string | null) {
@@ -314,6 +320,82 @@
   function toggleLogoutOnBrowserClose() {
     logoutOnBrowserClose = !logoutOnBrowserClose;
     auth.setLogoutOnBrowserClose(logoutOnBrowserClose);
+  }
+
+  function loadNotificationVolume() {
+    if (typeof localStorage === 'undefined') {
+      return 0.6;
+    }
+
+    const rawValue = localStorage.getItem(NOTIFICATION_VOLUME_STORAGE_KEY);
+    const parsed = rawValue === null ? Number.NaN : Number(rawValue);
+    if (!Number.isFinite(parsed)) {
+      return 0.6;
+    }
+
+    return Math.max(0, Math.min(1, parsed));
+  }
+
+  function saveNotificationVolume(value: number) {
+    notificationVolume = Math.max(0, Math.min(1, value));
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    try {
+      localStorage.setItem(NOTIFICATION_VOLUME_STORAGE_KEY, String(notificationVolume));
+    } catch {
+      // ignore localStorage write failures
+    }
+  }
+
+  async function playNotificationSound() {
+    if (notificationVolume <= 0 || typeof window === 'undefined') {
+      return;
+    }
+
+    const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) {
+      return;
+    }
+
+    try {
+      const audioContext = new AudioContextCtor();
+      const now = audioContext.currentTime;
+      const masterGain = audioContext.createGain();
+      masterGain.connect(audioContext.destination);
+      masterGain.gain.setValueAtTime(notificationVolume * 0.60, now);
+
+      const notes = [
+        { frequency: 659, start: 0, duration: 0.08, type: 'triangle' as OscillatorType, peak: 0.26 },
+        { frequency: 988, start: 0.09, duration: 0.16, type: 'sine' as OscillatorType, peak: 0.32 },
+        { frequency: 1318, start: 0.24, duration: 0.12, type: 'triangle' as OscillatorType, peak: 0.22 }
+      ];
+
+      for (const note of notes) {
+        const oscillator = audioContext.createOscillator();
+        const noteGain = audioContext.createGain();
+
+        oscillator.type = note.type;
+        oscillator.frequency.setValueAtTime(note.frequency, now + note.start);
+        oscillator.connect(noteGain);
+        noteGain.connect(masterGain);
+
+        noteGain.gain.setValueAtTime(0.0001, now + note.start);
+        noteGain.gain.exponentialRampToValueAtTime(notificationVolume * note.peak, now + note.start + 0.012);
+        noteGain.gain.exponentialRampToValueAtTime(0.0001, now + note.start + note.duration);
+
+        oscillator.start(now + note.start);
+        oscillator.stop(now + note.start + note.duration);
+      }
+
+      const totalDuration = 0.38;
+      setTimeout(() => {
+        void audioContext.close().catch(() => undefined);
+      }, Math.ceil(totalDuration * 1000) + 50);
+    } catch {
+      // ignore notification sound failures
+    }
   }
 
   function openSidebarUserModal(event: CustomEvent<{ user: SearchUserResult }>) {
@@ -905,6 +987,7 @@
   }
 
   onMount(() => {
+    notificationVolume = loadNotificationVolume();
     loadChats();
 
     unsubscribeMemberEvent = memberEvent.subscribe(async (event) => {
@@ -945,7 +1028,18 @@
       lastProcessedMessageKey = messageKey;
 
       try {
+        const shouldNotify =
+          event.eventType === 'new_message' &&
+          event.message.senderId !== $auth.user?.id &&
+          !mutedChatIds.includes(event.chatId) &&
+          typeof document !== 'undefined' &&
+          (document.visibilityState !== 'visible' || !document.hasFocus());
+
         await chats.applyIncomingEvent(event.chatId, event.message, selectedChatId);
+
+        if (shouldNotify) {
+          void playNotificationSound();
+        }
       } finally {
         sseMessage.set(null);
       }
@@ -1139,6 +1233,21 @@
         <button class="settings-btn" on:click={() => { showExportKeyModal = true; showSettingsModal = false; }}>Экспорт приватного ключа</button>
         <button class="settings-btn" on:click={handleLogout}>Выйти из аккаунта</button>
         <button class="settings-btn danger" on:click={() => { showDeleteAccountModal = true; showSettingsModal = false; }}>Удалить аккаунт</button>
+        <div class="settings-slider">
+          <label for="notificationVolume">Громкость уведомлений</label>
+          <div class="settings-slider-row">
+            <input
+              id="notificationVolume"
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={Math.round(notificationVolume * 100)}
+              on:input={(event) => saveNotificationVolume(Number((event.currentTarget as HTMLInputElement).value) / 100)}
+            />
+            <span>{Math.round(notificationVolume * 100)}%</span>
+          </div>
+        </div>
         <details class="security-section" bind:open={showSecuritySection}>
           <summary class="settings-btn security-summary">Безопасность</summary>
           <div class="security-list">
@@ -1491,6 +1600,41 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .settings-slider {
+    padding: 12px 14px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #ffffff;
+  }
+
+  .settings-slider label {
+    display: block;
+    margin-bottom: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #475569;
+  }
+
+  .settings-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .settings-slider-row input[type='range'] {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .settings-slider-row span {
+    flex: none;
+    min-width: 46px;
+    text-align: right;
+    font-size: 13px;
+    color: #64748b;
+    font-weight: 600;
   }
 
   .settings-list > .settings-btn:nth-of-type(n + 3) {

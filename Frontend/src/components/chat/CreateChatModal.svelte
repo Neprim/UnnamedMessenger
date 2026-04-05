@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, tick } from 'svelte';
   import { isPersonalChatWithUser } from '../../lib/chat-helpers';
   import type { Chat, ChatType, SearchUserResult } from '../../lib/types';
 
@@ -19,9 +19,24 @@
     selectUser: { userId: string };
   }>();
 
+  let chatNameInput: HTMLInputElement | null = null;
+  let userSearchInput: HTMLInputElement | null = null;
+
   function handleClose() {
     dispatch('close');
   }
+
+  async function focusRelevantInput() {
+    await tick();
+    if (chatType === 'gm') {
+      chatNameInput?.focus();
+      return;
+    }
+
+    userSearchInput?.focus();
+  }
+
+  $: focusRelevantInput();
 </script>
 
 <div class="modal-shell">
@@ -40,7 +55,14 @@
     {#if chatType === 'gm'}
       <div class="field">
         <label for="chatName">Название</label>
-        <input id="chatName" type="text" bind:value={chatName} maxlength="30" placeholder="Название группы" />
+        <input
+          id="chatName"
+          bind:this={chatNameInput}
+          type="text"
+          bind:value={chatName}
+          maxlength="30"
+          placeholder="Название группы"
+        />
       </div>
     {/if}
 
@@ -49,9 +71,10 @@
         <label for="userSearch">Выберите пользователя</label>
         <input
           id="userSearch"
+          bind:this={userSearchInput}
           type="text"
           bind:value={userSearch}
-          placeholder="Поиск пользователей..."
+          placeholder="Поиск по пользователям..."
           on:input={() => dispatch('search')}
         />
       </div>

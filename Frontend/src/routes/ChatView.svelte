@@ -109,6 +109,8 @@
   let editingMessage: { id: string; content: string; fileIds: string[] } | null = null;
   let editingText = '';
   let messagesContainer: HTMLDivElement | undefined;
+  let messageInputRef: { focusTextarea: () => void } | null = null;
+  let focusedChatId: string | null = null;
   let scrollTimeout: ReturnType<typeof setTimeout> | null = null;
   let errorTimeout: ReturnType<typeof setTimeout> | null = null;
   let loadedChatId: string | null = null;
@@ -623,12 +625,53 @@
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
+  function focusMessageInput() {
+    messageInputRef?.focusTextarea();
+  }
+
+  function handleGlobalKeydown(event: KeyboardEvent) {
+    const target = event.target as HTMLElement | null;
+    const tagName = target?.tagName?.toLowerCase();
+    const isEditableTarget =
+      tagName === 'input' ||
+      tagName === 'textarea' ||
+      target?.isContentEditable ||
+      Boolean(target?.closest('[contenteditable="true"]'));
+
+    if (isEditableTarget || event.ctrlKey || event.metaKey || event.altKey || !selectedChat?.id) {
+      return;
+    }
+
+    if (event.key.length === 1) {
+      event.preventDefault();
+      newMessage += event.key;
+      tick().then(focusMessageInput);
+      return;
+    }
+
+    if (event.key === 'Backspace') {
+      event.preventDefault();
+      focusMessageInput();
+    }
+  }
+
   function startReply(message: Message) {
     replyTarget = message;
     closeContextMenu();
     requestAnimationFrame(() => {
-      (document.getElementById('messageInput') as HTMLTextAreaElement | null)?.focus();
+      focusMessageInput();
     });
+  }
+
+  $: if (selectedChat?.id && selectedChat.id !== focusedChatId) {
+    focusedChatId = selectedChat.id;
+    tick().then(focusMessageInput);
+  }
+  $: if (showRenameChatModal) {
+    tick().then(() => (document.getElementById('renameChatInput') as HTMLInputElement | null)?.focus());
+  }
+  $: if (showAddMemberModal) {
+    tick().then(() => (document.getElementById('userSearch') as HTMLInputElement | null)?.focus());
   }
 
   async function togglePinFromMenu() {
@@ -1744,7 +1787,7 @@
         if (messagesContainer) {
           messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
-        (document.getElementById('messageInput') as HTMLTextAreaElement | null)?.focus();
+        focusMessageInput();
       });
     } catch (exception) {
       if (uploadedFileIds.length > 0) {
@@ -2421,6 +2464,8 @@
   });
 </script>
 
+<svelte:window on:keydown={handleGlobalKeydown} />
+
 <div
   class="chat-container"
   role="region"
@@ -2547,6 +2592,7 @@
     {/if}
 
     <MessageInput
+      bind:this={messageInputRef}
       bind:value={newMessage}
       disabled={sending || !chatKey}
       attachments={composerAttachments}
