@@ -3,6 +3,7 @@
   import * as crypto from '../lib/crypto';
   import { api, setToken } from '../lib/api';
   import { auth } from '../lib/stores';
+  import { getPreferredAuthStorage } from '../lib/auth-store';
   import ProjectInfoModal from '../components/common/ProjectInfoModal.svelte';
 
   let username = '';
@@ -28,9 +29,6 @@
       const { salt, id, token, publicKey, avatarUrl, avatarUpdatedAt } = await api.auth.login({ username, password });
 
       setToken(token);
-      sessionStorage.setItem('token', token);
-      sessionStorage.setItem('username', username);
-      sessionStorage.setItem('publicKey', publicKey);
 
       const encryptedPrivateKey = localStorage.getItem('encryptedPrivateKey');
       if (!encryptedPrivateKey) {
@@ -45,9 +43,14 @@
 
         const exportedPrivateKey = await window.crypto.subtle.exportKey('pkcs8', privateKey);
         const privateKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(exportedPrivateKey)));
-        sessionStorage.setItem('privateKey', privateKeyBase64);
+        const preferredStorage = getPreferredAuthStorage();
+        preferredStorage?.setItem('token', token);
+        preferredStorage?.setItem('username', username);
+        preferredStorage?.setItem('publicKey', publicKey);
+        preferredStorage?.setItem('privateKey', privateKeyBase64);
 
         const me = await api.users.me().catch(() => null);
+        auth.persistAuthSession({ token, username, publicKey, privateKeyBase64 });
         auth.setUser(
           {
             id,

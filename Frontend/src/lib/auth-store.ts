@@ -9,8 +9,98 @@ export interface AuthState {
   privateKey: CryptoKey | null;
 }
 
-async function loadPrivateKeyFromSessionStorage(): Promise<CryptoKey | null> {
-  const privateKeyBase64 = sessionStorage.getItem('privateKey');
+const STORAGE_PREFERENCE_KEY = 'logoutOnBrowserClose';
+
+type AuthStoragePreference = 'session' | 'local';
+
+function canUseWebStorage() {
+  return typeof window !== 'undefined';
+}
+
+export function getLogoutOnBrowserClose() {
+  if (!canUseWebStorage()) {
+    return true;
+  }
+
+  const rawValue = localStorage.getItem(STORAGE_PREFERENCE_KEY);
+  if (rawValue === null) {
+    return true;
+  }
+
+  return rawValue !== 'false';
+}
+
+export function persistLogoutOnBrowserClose(value: boolean) {
+  if (!canUseWebStorage()) {
+    return;
+  }
+
+  localStorage.setItem(STORAGE_PREFERENCE_KEY, value ? 'true' : 'false');
+}
+
+export function getPreferredAuthStorage(): Storage | null {
+  if (!canUseWebStorage()) {
+    return null;
+  }
+
+  return getLogoutOnBrowserClose() ? sessionStorage : localStorage;
+}
+
+export function getAuthStoragePreference(): AuthStoragePreference {
+  return getLogoutOnBrowserClose() ? 'session' : 'local';
+}
+
+function getAuthStoragesInReadOrder() {
+  if (!canUseWebStorage()) {
+    return [];
+  }
+
+  const preferredStorage = getPreferredAuthStorage();
+  if (preferredStorage === sessionStorage) {
+    return [sessionStorage, localStorage];
+  }
+
+  return [localStorage, sessionStorage];
+}
+
+function readAuthValue(key: string) {
+  for (const storage of getAuthStoragesInReadOrder()) {
+    const value = storage.getItem(key);
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+export function getStoredAuthValue(key: string) {
+  return readAuthValue(key);
+}
+
+function clearAuthStorage(storage: Storage) {
+  storage.removeItem('token');
+  storage.removeItem('username');
+  storage.removeItem('publicKey');
+  storage.removeItem('privateKey');
+}
+
+function writeAuthSnapshot(values: Record<string, string>) {
+  const targetStorage = getPreferredAuthStorage();
+  if (!targetStorage) {
+    return;
+  }
+
+  const otherStorage = targetStorage === sessionStorage ? localStorage : sessionStorage;
+  clearAuthStorage(otherStorage);
+
+  for (const [key, value] of Object.entries(values)) {
+    targetStorage.setItem(key, value);
+  }
+}
+
+async function loadPrivateKeyFromStorage(): Promise<CryptoKey | null> {
+  const privateKeyBase64 = readAuthValue('privateKey');
   if (!privateKeyBase64) return null;
 
   try {
@@ -38,8 +128,20 @@ function createAuthStore() {
   return {
     subscribe,
     setUser: (user: User, privateKey: CryptoKey) => {
-      sessionStorage.setItem('username', user.username);
-      sessionStorage.setItem('publicKey', user.publicKey);
+      const token = readAuthValue('token');
+      const privateKeyBase64 = readAuthValue('privateKey');
+      if (token && privateKeyBase64) {
+        writeAuthSnapshot({
+          token,
+          username: user.username,
+          publicKey: user.publicKey,
+          privateKey: privateKeyBase64
+        });
+      } else {
+        const targetStorage = getPreferredAuthStorage();
+        targetStorage?.setItem('username', user.username);
+        targetStorage?.setItem('publicKey', user.publicKey);
+      }
       update((state) => ({ ...state, isAuthenticated: true, user, privateKey }));
     },
     setPrivateKey: (privateKey: CryptoKey) => {
@@ -47,7 +149,10 @@ function createAuthStore() {
     },
     updateUser: (updates: Partial<User>) => {
       if (updates.username) {
-        sessionStorage.setItem('username', updates.username);
+        const targetStorage = getPreferredAuthStorage();
+        if (targetStorage) {
+          targetStorage.setItem('username', updates.username);
+        }
       }
 
       update((state) => ({
@@ -55,19 +160,48 @@ function createAuthStore() {
         user: state.user ? { ...state.user, ...updates } : null
       }));
     },
+    persistAuthSession: (session: { token: string; username: string; publicKey: string; privateKeyBase64: string }) => {
+      writeAuthSnapshot({
+        token: session.token,
+        username: session.username,
+        publicKey: session.publicKey,
+        privateKey: session.privateKeyBase64
+      });
+      setToken(session.token);
+    },
+    setLogoutOnBrowserClose: (value: boolean) => {
+      persistLogoutOnBrowserClose(value);
+      const token = readAuthValue('token');
+      const username = readAuthValue('username');
+      const publicKey = readAuthValue('publicKey');
+      const privateKey = readAuthValue('privateKey');
+
+      if (token && username && publicKey && privateKey) {
+        writeAuthSnapshot({
+          token,
+          username,
+          publicKey,
+          privateKey
+        });
+      } else {
+        const preferredStorage = getPreferredAuthStorage();
+        const otherStorage = preferredStorage === sessionStorage ? localStorage : sessionStorage;
+        clearAuthStorage(otherStorage);
+      }
+    },
     logout: () => {
-      sessionStorage.removeItem('token');
-      sessionStorage.removeItem('username');
-      sessionStorage.removeItem('publicKey');
-      sessionStorage.removeItem('privateKey');
+      if (canUseWebStorage()) {
+        clearAuthStorage(sessionStorage);
+        clearAuthStorage(localStorage);
+      }
       setToken(null);
       set({ isAuthenticated: false, isLoading: false, user: null, privateKey: null });
     },
     loadFromStorage: async () => {
-      const username = sessionStorage.getItem('username');
-      const publicKey = sessionStorage.getItem('publicKey');
-      const token = sessionStorage.getItem('token');
-      const privateKey = await loadPrivateKeyFromSessionStorage();
+      const username = readAuthValue('username');
+      const publicKey = readAuthValue('publicKey');
+      const token = readAuthValue('token');
+      const privateKey = await loadPrivateKeyFromStorage();
 
       if (token) {
         setToken(token);

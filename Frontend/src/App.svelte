@@ -2,6 +2,7 @@
   import Router, { push } from 'svelte-spa-router';
   import { onDestroy, onMount } from 'svelte';
   import { auth, chats } from './lib/stores';
+  import { getStoredAuthValue } from './lib/auth-store';
   import { connectSSE, disconnectSSE, ensureSSEConnection, isSSEConnected } from './lib/sse';
 
   import Register from './routes/Register.svelte';
@@ -66,8 +67,8 @@
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     sseWatchdog = setInterval(() => {
-      const hasToken = sessionStorage.getItem('token') !== null;
-      const hasPrivateKey = sessionStorage.getItem('privateKey') !== null;
+      const hasToken = getStoredAuthValue('token') !== null;
+      const hasPrivateKey = getStoredAuthValue('privateKey') !== null;
       if (hasToken && hasPrivateKey && !isSSEConnected()) {
         ensureSSEConnection();
       }
@@ -76,7 +77,7 @@
     (async () => {
       await auth.loadFromStorage();
 
-      const hasPrivateKey = sessionStorage.getItem('privateKey') !== null;
+      const hasPrivateKey = getStoredAuthValue('privateKey') !== null;
       const hasEncryptedKey = localStorage.getItem('encryptedPrivateKey') !== null;
 
       if (hasPrivateKey) {

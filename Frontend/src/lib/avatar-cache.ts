@@ -1,3 +1,5 @@
+import { getStoredAuthValue } from './auth-store';
+
 const runtimeAvatarUrls = new Map<string, string>();
 const pendingLoads = new Map<string, Promise<string>>();
 
@@ -6,7 +8,7 @@ function isDirectSource(src: string) {
 }
 
 function getAuthHeaders() {
-  const token = sessionStorage.getItem('token');
+  const token = getStoredAuthValue('token');
   const headers: Record<string, string> = {};
   if (token) {
     headers.Authorization = `Bearer ${token}`;

@@ -3,6 +3,7 @@
   import * as crypto from '../lib/crypto';
   import { api, setToken } from '../lib/api';
   import { auth } from '../lib/stores';
+  import { getPreferredAuthStorage } from '../lib/auth-store';
   import ProjectInfoModal from '../components/common/ProjectInfoModal.svelte';
 
   let username = '';
@@ -34,7 +35,6 @@
       });
 
       setToken(token);
-      sessionStorage.setItem('token', token);
 
       const saltBytes = Uint8Array.from(atob(salt), (char) => char.charCodeAt(0));
       const encryptedPrivateKey = await crypto.encryptPrivateKey(privateKey, password, saltBytes);
@@ -43,10 +43,13 @@
 
       const exportedPrivateKey = await window.crypto.subtle.exportKey('pkcs8', privateKey);
       const privateKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(exportedPrivateKey)));
-      sessionStorage.setItem('privateKey', privateKeyBase64);
-      sessionStorage.setItem('username', username);
-      sessionStorage.setItem('publicKey', publicKeyExport);
+      const preferredStorage = getPreferredAuthStorage();
+      preferredStorage?.setItem('token', token);
+      preferredStorage?.setItem('privateKey', privateKeyBase64);
+      preferredStorage?.setItem('username', username);
+      preferredStorage?.setItem('publicKey', publicKeyExport);
 
+      auth.persistAuthSession({ token, username, publicKey: publicKeyExport, privateKeyBase64 });
       auth.setUser({ id, username, publicKey: publicKeyExport, blockedUserIds: [] }, privateKey);
       pendingRegisteredUsername = username;
       showExportKeyPrompt = true;

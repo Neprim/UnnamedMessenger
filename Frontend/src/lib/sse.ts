@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { getStoredAuthValue } from './auth-store';
 import type { Message, PinnedMessage } from './types';
 
 export interface SSEEvent {
@@ -37,7 +38,7 @@ function scheduleReconnect() {
 export function connectSSE() {
   if (eventSource && eventSource.readyState !== EventSource.CLOSED) return;
 
-  const token = sessionStorage.getItem('token');
+  const token = getStoredAuthValue('token');
   if (!token) {
     return;
   }

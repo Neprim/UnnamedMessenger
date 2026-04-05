@@ -3,6 +3,7 @@
   import { push } from 'svelte-spa-router';
   import { api } from '../lib/api';
   import { auth, chats, type Chat } from '../lib/stores';
+  import { getLogoutOnBrowserClose } from '../lib/auth-store';
   import { chatDeletedEvent, chatUpdatedEvent, deletedFilesEvent, memberEvent, readStateEvent, sseMessage, typingEvent, userPresenceEvent } from '../lib/sse';
   import * as crypto from '../lib/crypto';
   import ChatSidebar from '../components/chat/ChatSidebar.svelte';
@@ -28,6 +29,8 @@
   let showProjectInfoModal = false;
   let showAvatarModal = false;
   let showUserFilesModal = false;
+  let showSecuritySection = false;
+  let logoutOnBrowserClose = true;
   let error = '';
   let errorTimeout: ReturnType<typeof setTimeout> | null = null;
   let exportConfirmChecked = false;
@@ -130,6 +133,9 @@
   $: if (typeof localStorage !== 'undefined' && pinnedChatStorageKey !== loadedPinnedChatStorageKey) {
     loadedPinnedChatStorageKey = pinnedChatStorageKey;
     pinnedChatIds = loadPinnedChatIds(pinnedChatStorageKey);
+  }
+  $: if (showSettingsModal) {
+    logoutOnBrowserClose = getLogoutOnBrowserClose();
   }
 
   function loadPinnedChatIds(storageKey: string | null) {
@@ -281,6 +287,11 @@
     sidebarSearch = '';
     sidebarUserResults = [];
     sidebarSearching = false;
+  }
+
+  function toggleLogoutOnBrowserClose() {
+    logoutOnBrowserClose = !logoutOnBrowserClose;
+    auth.setLogoutOnBrowserClose(logoutOnBrowserClose);
   }
 
   function openSidebarUserModal(event: CustomEvent<{ user: SearchUserResult }>) {
@@ -1104,6 +1115,30 @@
         <button class="settings-btn" on:click={() => { showExportKeyModal = true; showSettingsModal = false; }}>Экспорт приватного ключа</button>
         <button class="settings-btn" on:click={handleLogout}>Выйти из аккаунта</button>
         <button class="settings-btn danger" on:click={() => { showDeleteAccountModal = true; showSettingsModal = false; }}>Удалить аккаунт</button>
+        <details class="security-section" bind:open={showSecuritySection}>
+          <summary class="settings-btn security-summary">Безопасность</summary>
+          <div class="security-list">
+            <label class="settings-toggle" for="logoutOnBrowserClose">
+              <span>Выходить из аккаунта при закрытии браузера</span>
+              <button
+                id="logoutOnBrowserClose"
+                class="toggle-switch"
+                type="button"
+                role="switch"
+                aria-label="Выходить из аккаунта при закрытии браузера"
+                aria-checked={logoutOnBrowserClose}
+                class:enabled={logoutOnBrowserClose}
+                on:click|preventDefault={toggleLogoutOnBrowserClose}
+              >
+                <span class="toggle-thumb"></span>
+              </button>
+            </label>
+            <button class="settings-btn" on:click={() => { showPasswordModal = true; showSettingsModal = false; }}>Изменить пароль</button>
+            <button class="settings-btn" on:click={() => { showExportKeyModal = true; showSettingsModal = false; }}>Экспорт приватного ключа</button>
+            <button class="settings-btn" on:click={handleLogout}>Выйти из аккаунта</button>
+            <button class="settings-btn danger" on:click={() => { showDeleteAccountModal = true; showSettingsModal = false; }}>Удалить аккаунт</button>
+          </div>
+        </details>
       </div>
       <div class="modal-actions">
         <button on:click={() => (showSettingsModal = false)}>Закрыть</button>
@@ -1434,6 +1469,10 @@
     gap: 10px;
   }
 
+  .settings-list > .settings-btn:nth-of-type(n + 3) {
+    display: none;
+  }
+
   .settings-header {
     display: flex;
     align-items: center;
@@ -1510,6 +1549,73 @@
   .settings-btn.danger {
     color: #f44336;
     border-color: #ffcdd2;
+  }
+
+  .security-section {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #f8fafc;
+  }
+
+  .security-summary {
+    list-style: none;
+    width: 100%;
+  }
+
+  .security-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .security-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0 10px 10px;
+  }
+
+  .settings-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    color: #475569;
+    font-size: 14px;
+  }
+
+  .toggle-switch {
+    position: relative;
+    width: 48px;
+    height: 28px;
+    border: none;
+    border-radius: 999px;
+    background: #cbd5e1;
+    cursor: pointer;
+    transition: background 0.2s ease;
+    flex: none;
+  }
+
+  .toggle-switch.enabled {
+    background: #2563eb;
+  }
+
+  .toggle-thumb {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #ffffff;
+    transition: transform 0.2s ease;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+  }
+
+  .toggle-switch.enabled .toggle-thumb {
+    transform: translateX(20px);
   }
 
   .warning-box {
