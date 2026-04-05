@@ -14,6 +14,7 @@
   import ProjectInfoModal from '../components/common/ProjectInfoModal.svelte';
   import ChatView from './ChatView.svelte';
   import { cacheFile, getCachedFile } from '../lib/file-cache';
+  import { loadMutedChatIds, saveMutedChatIds } from '../lib/chat-preferences';
   import { formatFileSize, isPersonalChatWithUser, parseFileMetadataJson } from '../lib/chat-helpers';
   import type { ChatFileMetadata, SearchUserResult } from '../lib/types';
 
@@ -107,8 +108,10 @@
   let unsubscribeReadState: (() => void) | undefined;
   let previousSelectedChatId: string | null = null;
   let pinnedChatIds: string[] = [];
+  let mutedChatIds: string[] = [];
   let pinnedChatStorageKey: string | null = null;
   let loadedPinnedChatStorageKey: string | null = null;
+  let loadedMutedChatUserId: string | null = null;
 
   $: selectedChatId = params.id ?? null;
   $: selectedChatDetail = selectedChatId ? $chats.find((chat) => chat.id === selectedChatId) ?? null : null;
@@ -133,6 +136,10 @@
   $: if (typeof localStorage !== 'undefined' && pinnedChatStorageKey !== loadedPinnedChatStorageKey) {
     loadedPinnedChatStorageKey = pinnedChatStorageKey;
     pinnedChatIds = loadPinnedChatIds(pinnedChatStorageKey);
+  }
+  $: if ($auth.user?.id !== loadedMutedChatUserId) {
+    loadedMutedChatUserId = $auth.user?.id ?? null;
+    mutedChatIds = loadMutedChatIds($auth.user?.id ?? null);
   }
   $: if (showSettingsModal) {
     logoutOnBrowserClose = getLogoutOnBrowserClose();
@@ -186,6 +193,21 @@
     }
 
     savePinnedChatIds([...pinnedChatIds, chatId]);
+  }
+
+  function toggleMutedChat(event: CustomEvent<{ chatId: string }>) {
+    const { chatId } = event.detail;
+    if (!chatId) {
+      return;
+    }
+
+    if (mutedChatIds.includes(chatId)) {
+      mutedChatIds = mutedChatIds.filter((id) => id !== chatId);
+    } else {
+      mutedChatIds = [...mutedChatIds, chatId];
+    }
+
+    saveMutedChatIds($auth.user?.id ?? null, mutedChatIds);
   }
 
   function resetCreateState() {
@@ -987,6 +1009,7 @@
       {loading}
       {selectedChatId}
       {pinnedChatIds}
+      {mutedChatIds}
       blockedUserIds={$auth.user?.blockedUserIds ?? []}
       searchQuery={sidebarSearch}
       {searchedChats}
@@ -995,6 +1018,7 @@
       on:create={() => (showCreateModal = true)}
       on:settings={() => (showSettingsModal = true)}
       on:togglepin={togglePinnedChat}
+      on:togglemute={toggleMutedChat}
       on:searchchange={handleSidebarSearchChange}
       on:clearsearch={clearSidebarSearch}
       on:openuser={openSidebarUserModal}

@@ -7,6 +7,7 @@
   export let loading = false;
   export let selectedChatId: string | null = null;
   export let pinnedChatIds: string[] = [];
+  export let mutedChatIds: string[] = [];
   export let searchQuery = '';
   export let searchedChats: Chat[] = [];
   export let searchedUsers: SearchUserResult[] = [];
@@ -17,6 +18,7 @@
     create: void;
     settings: void;
     togglepin: { chatId: string };
+    togglemute: { chatId: string };
     searchchange: { value: string };
     clearsearch: void;
     openuser: { user: SearchUserResult };
@@ -38,6 +40,7 @@
         user: SearchUserResult;
       }
     | null = null;
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
   function getChatTitle(chat: Chat) {
     return chat.type === 'pm' ? chat.otherUser?.username || 'Личный чат' : chat.name || 'Групповой чат';
@@ -111,12 +114,48 @@
     userContextMenu = null;
   }
 
+  function startChatLongPress(event: TouchEvent, chat: Chat) {
+    clearChatLongPress();
+    const touch = event.touches[0];
+    if (!touch) {
+      return;
+    }
+
+    longPressTimer = setTimeout(() => {
+      userContextMenu = null;
+      chatContextMenu = {
+        x: touch.clientX,
+        y: touch.clientY,
+        chatId: chat.id,
+        user: buildPmUser(chat)
+      };
+      positionMenu('.sidebar-chat-context-menu', 'chat');
+      longPressTimer = null;
+    }, 500);
+  }
+
+  function clearChatLongPress() {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
   function togglePinnedFromContextMenu() {
     if (!chatContextMenu?.chatId) {
       return;
     }
 
     dispatch('togglepin', { chatId: chatContextMenu.chatId });
+    closeContextMenus();
+  }
+
+  function toggleMutedFromContextMenu() {
+    if (!chatContextMenu?.chatId) {
+      return;
+    }
+
+    dispatch('togglemute', { chatId: chatContextMenu.chatId });
     closeContextMenus();
   }
 
@@ -159,7 +198,15 @@
           {@const chatTitle = getChatTitle(chat)}
           {@const isPinned = pinnedChatIds.includes(chat.id)}
           <div class="chat-item-wrap" class:selected={selectedChatId === chat.id}>
-            <a href="#/chats/{chat.id}" class="chat-item" on:contextmenu={(event) => openChatContextMenu(event, chat)}>
+            <a
+              href="#/chats/{chat.id}"
+              class="chat-item"
+              on:contextmenu={(event) => openChatContextMenu(event, chat)}
+              on:touchstart={(event) => startChatLongPress(event, chat)}
+              on:touchend={clearChatLongPress}
+              on:touchcancel={clearChatLongPress}
+              on:touchmove={clearChatLongPress}
+            >
               {#if chat.type === 'pm'}
                 {#key `${chat.id}:${chat.otherUser?.avatarUrl ?? ''}`}
                   <Avatar name={chatTitle} src={chat.otherUser?.avatarUrl} size={44} />
@@ -172,12 +219,12 @@
 
               <div class="chat-info">
                 <div class="chat-name">
-                  <span class="chat-name-text" title={chatTitle}>{chatTitle}</span>
+                  <span class="chat-name-text" class:muted={mutedChatIds.includes(chat.id)} title={chatTitle}>{chatTitle}</span>
                   {#if isPinned}
                     <span class="pin-indicator" aria-label="Чат закреплён" title="Чат закреплён">📌</span>
                   {/if}
                   {#if chat.unreadCount && chat.unreadCount > 0}
-                    <span class="unread-badge">{chat.unreadCount}</span>
+                    <span class="unread-badge" class:muted={mutedChatIds.includes(chat.id)}>{chat.unreadCount}</span>
                   {/if}
                 </div>
 
@@ -241,7 +288,15 @@
         {@const chatTitle = getChatTitle(chat)}
         {@const isPinned = pinnedChatIds.includes(chat.id)}
         <div class="chat-item-wrap" class:selected={selectedChatId === chat.id}>
-          <a href="#/chats/{chat.id}" class="chat-item" on:contextmenu={(event) => openChatContextMenu(event, chat)}>
+          <a
+            href="#/chats/{chat.id}"
+            class="chat-item"
+            on:contextmenu={(event) => openChatContextMenu(event, chat)}
+            on:touchstart={(event) => startChatLongPress(event, chat)}
+            on:touchend={clearChatLongPress}
+            on:touchcancel={clearChatLongPress}
+            on:touchmove={clearChatLongPress}
+          >
             {#if chat.type === 'pm'}
               {#key `${chat.id}:${chat.otherUser?.avatarUrl ?? ''}`}
                 <Avatar name={chatTitle} src={chat.otherUser?.avatarUrl} size={44} />
@@ -254,12 +309,12 @@
 
             <div class="chat-info">
               <div class="chat-name">
-                <span class="chat-name-text" title={chatTitle}>{chatTitle}</span>
+                <span class="chat-name-text" class:muted={mutedChatIds.includes(chat.id)} title={chatTitle}>{chatTitle}</span>
                 {#if isPinned}
                   <span class="pin-indicator" aria-label="Чат закреплён" title="Чат закреплён">📌</span>
                 {/if}
                 {#if chat.unreadCount && chat.unreadCount > 0}
-                  <span class="unread-badge">{chat.unreadCount}</span>
+                  <span class="unread-badge" class:muted={mutedChatIds.includes(chat.id)}>{chat.unreadCount}</span>
                 {/if}
               </div>
 
@@ -311,6 +366,9 @@
     >
       <button class="context-menu-item" type="button" role="menuitem" on:click={togglePinnedFromContextMenu}>
         {pinnedChatIds.includes(chatContextMenu.chatId) ? 'Открепить чат' : 'Закрепить чат'}
+      </button>
+      <button class="context-menu-item" type="button" role="menuitem" on:click={toggleMutedFromContextMenu}>
+        {mutedChatIds.includes(chatContextMenu.chatId) ? 'Отменить заглушение' : 'Заглушить чат'}
       </button>
       {#if chatMenuUser}
         <button class="context-menu-item" type="button" role="menuitem" on:click={() => toggleBlockForUser(chatMenuUser)}>
@@ -460,6 +518,11 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    transition: color 0.2s ease;
+  }
+
+  .chat-name-text.muted {
+    color: #8f98a7;
   }
 
   .pin-indicator {
@@ -479,6 +542,10 @@
     border-radius: 10px;
     min-width: 18px;
     text-align: center;
+  }
+
+  .unread-badge.muted {
+    background: #94a3b8;
   }
 
   .chat-meta {

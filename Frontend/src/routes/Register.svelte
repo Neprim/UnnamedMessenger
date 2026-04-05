@@ -15,6 +15,8 @@
   let exportingKey = false;
   let pendingRegisteredUsername = '';
 
+  $: isFirstVisit = localStorage.getItem('encryptedPrivateKey') === null;
+
   async function handleRegister() {
     if (!username || !password) {
       error = 'Заполните все поля';
@@ -96,7 +98,7 @@
 </script>
 
 <div class="container">
-  <button class="info-btn" type="button" on:click={() => (showProjectInfoModal = true)}>О проекте</button>
+  <button class="info-btn" class:pulse={isFirstVisit} type="button" on:click={() => (showProjectInfoModal = true)}>О проекте</button>
   <h1>Регистрация</h1>
 
   <form on:submit|preventDefault={handleRegister}>
@@ -166,6 +168,22 @@
     cursor: pointer;
     font-size: 13px;
     font-weight: 600;
+  }
+
+  .info-btn.pulse {
+    animation: pulse-info-btn 1.6s ease-in-out infinite;
+  }
+
+  @keyframes pulse-info-btn {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.14);
+      transform: scale(1);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(37, 99, 235, 0);
+      transform: scale(1.04);
+    }
   }
 
   h1 {

@@ -4,6 +4,7 @@
   import { auth, chats } from './lib/stores';
   import { getStoredAuthValue } from './lib/auth-store';
   import { connectSSE, disconnectSSE, ensureSSEConnection, isSSEConnected } from './lib/sse';
+  import { loadMutedChatIds, subscribeMutedChatIds } from './lib/chat-preferences';
 
   import Register from './routes/Register.svelte';
   import Login from './routes/Login.svelte';
@@ -18,8 +19,14 @@
   };
 
   let unsubscribe: (() => void) | undefined;
-  let lastFaviconState: 'unread' | 'idle' | null = null;
   let sseWatchdog: ReturnType<typeof setInterval> | undefined;
+  let faviconBlinkTimer: ReturnType<typeof setInterval> | undefined;
+  let mutedChatIds: string[] = [];
+  let mutedChatSubscriber: (() => void) | undefined;
+  let trackedMutedUserId: string | null = null;
+  let faviconBlinkOn = true;
+  let lastFaviconHref: string | null = null;
+  let unreadCount = 0;
 
   function ensureFaviconLink() {
     let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
@@ -42,20 +49,79 @@
     return `data:image/svg+xml,${encodeURIComponent(svg)}`;
   }
 
-  function updateFavicon(hasUnread: boolean) {
-    if (typeof document === 'undefined') return;
+  function updateFavicon(unreadCount: number) {
+    if (typeof document === 'undefined') {
+      return;
+    }
 
-    const nextState = hasUnread ? 'unread' : 'idle';
-    if (lastFaviconState === nextState) return;
+    const fillColor = unreadCount > 0 && faviconBlinkOn ? '#dc2626' : '#94a3b8';
+    const nextHref = createFaviconDataUrl(fillColor);
+    if (lastFaviconHref === nextHref) {
+      return;
+    }
 
     const link = ensureFaviconLink();
-    link.href = createFaviconDataUrl(hasUnread ? '#dc2626' : '#94a3b8');
-    lastFaviconState = nextState;
+    link.href = nextHref;
+    lastFaviconHref = nextHref;
+  }
+
+  function syncUnreadIndicators() {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    document.title = unreadCount > 0 ? `${unreadCount} непрочитанных | Безымянный гонец` : 'Безымянный гонец';
+    updateFavicon(unreadCount);
+  }
+
+  function startUnreadBlinking() {
+    if (faviconBlinkTimer) {
+      return;
+    }
+
+    faviconBlinkTimer = setInterval(() => {
+      faviconBlinkOn = !faviconBlinkOn;
+      syncUnreadIndicators();
+    }, 1000);
+  }
+
+  function stopUnreadBlinking() {
+    if (faviconBlinkTimer) {
+      clearInterval(faviconBlinkTimer);
+      faviconBlinkTimer = undefined;
+    }
+
+    faviconBlinkOn = true;
+  }
+
+  function refreshMutedChatsSubscription() {
+    const userId = $auth.user?.id ?? null;
+    if (trackedMutedUserId === userId) {
+      return;
+    }
+
+    mutedChatSubscriber?.();
+    trackedMutedUserId = userId;
+    mutedChatIds = loadMutedChatIds(userId);
+    mutedChatSubscriber = subscribeMutedChatIds(userId, (nextMutedChatIds) => {
+      mutedChatIds = nextMutedChatIds;
+    });
   }
 
   $: if (typeof document !== 'undefined') {
-    document.title = 'Безымянный гонец';
-    updateFavicon($chats.some((chat) => (chat.unreadCount ?? 0) > 0));
+    unreadCount = $chats
+      .filter((chat) => !mutedChatIds.includes(chat.id))
+      .reduce((sum, chat) => sum + (chat.unreadCount ?? 0), 0);
+  }
+
+  $: if (typeof document !== 'undefined') {
+    refreshMutedChatsSubscription();
+    if (unreadCount > 0) {
+      startUnreadBlinking();
+    } else {
+      stopUnreadBlinking();
+    }
+    syncUnreadIndicators();
   }
 
   onMount(() => {
@@ -102,13 +168,21 @@
       if (sseWatchdog) {
         clearInterval(sseWatchdog);
       }
+      if (faviconBlinkTimer) {
+        clearInterval(faviconBlinkTimer);
+      }
+      mutedChatSubscriber?.();
     };
   });
 
   onDestroy(() => {
     unsubscribe?.();
+    mutedChatSubscriber?.();
     if (sseWatchdog) {
       clearInterval(sseWatchdog);
+    }
+    if (faviconBlinkTimer) {
+      clearInterval(faviconBlinkTimer);
     }
     disconnectSSE();
   });
