@@ -33,7 +33,7 @@ app.use(cookieParser());
 
 const openApiSpec = JSON.parse(fs.readFileSync(path.join(__dirname, 'openapi.json'), 'utf8'));
 
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openApiSpec));
+// app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openApiSpec));
 
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
